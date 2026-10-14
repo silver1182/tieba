@@ -9,6 +9,10 @@ let onlineCount = 0;
 let currentFilter = '全部';
 let currentSort = 'latest';
 let currentSearch = '';
+let topicPage = 1;
+let topicTotal = 0;
+const TOPIC_PAGE_SIZE = 20;
+const REPLY_PAGE_SIZE = 20;
 
 const CAT_EMOJI = {
   '游戏讨论':'🎮','心得分享':'📖','求助提问':'❓','独立游戏':'🎲','趣味闲聊':'🔥',
@@ -57,6 +61,129 @@ function fmtTime(ts){
 }
 function avatarImg(name, cls){
   return `<img class="avatar ${cls||''}" src="${avatarDataUri(name)}" alt="${esc(name)}">`;
+}
+
+/* ---------- Markdown 渲染（轻量、XSS 安全） ---------- */
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function renderInline(t){
+  return escapeHtml(t)
+    .replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/!\[([^\]]*)\]\((\/uploads\/[a-f0-9]{16}\.(?:png|jpe?g|gif|webp))\)/gi, (m, alt, url) => `<img src="${url}" alt="${alt}" loading="lazy">`)
+    .replace(/\[([^\]]+)\]\((\/uploads\/[a-f0-9]{16}\.(?:png|jpe?g|gif|webp))\)/gi, (m, text, url) => `<a href="${url}" target="_blank">${text}</a>`)
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    .replace(/(^|\s)(https?:\/\/[^\s<]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>')
+    .replace(/\n/g, '<br>');
+}
+function renderMarkdown(src){
+  if(!src) return '';
+  const lines = String(src).replace(/\r\n/g, '\n').split('\n');
+  let html = '', inCode = false, inQuote = false, inList = false;
+  const closeQuote = () => { if(inQuote){ html += '</blockquote>'; inQuote = false; } };
+  const closeList = () => { if(inList){ html += '</ul>'; inList = false; } };
+  for(const raw of lines){
+    if(/^```/.test(raw)){
+      closeQuote(); closeList();
+      html += inCode ? '</code></pre>' : '<pre><code>';
+      inCode = !inCode; continue;
+    }
+    if(inCode){ html += escapeHtml(raw) + '\n'; continue; }
+    if(/^\s*>\s?/.test(raw)){
+      closeList();
+      if(!inQuote){ closeQuote(); html += '<blockquote>'; inQuote = true; }
+      html += renderInline(raw.replace(/^\s*>\s?/, '')) + '<br>'; continue;
+    }
+    closeQuote();
+    const h = /^(#{1,6})\s+(.*)$/.exec(raw);
+    if(h){ closeList(); html += `<h${h[1].length}>${renderInline(h[2])}</h${h[1].length}>`; continue; }
+    const ul = /^\s*[-*+]\s+(.*)$/.exec(raw);
+    const ol = /^\s*\d+[.、]\s+(.*)$/.exec(raw);
+    if(ul || ol){
+      if(!inList){ html += '<ul>'; inList = true; }
+      html += `<li>${renderInline((ul || ol)[1])}</li>`;
+      continue;
+    }
+    closeList();
+    if(!raw.trim()){ html += '<br>'; continue; }
+    html += `<p>${renderInline(raw)}</p>`;
+  }
+  closeQuote(); closeList();
+  if(inCode) html += '</code></pre>';
+  return html;
+}
+
+/* ---------- 图片上传（base64 提交，前端限制尺寸） ---------- */
+async function uploadImage(file){
+  if(!file) throw new Error('未选择文件');
+  if(!/^image\/(png|jpe?g|gif|webp)$/i.test(file.type)) throw new Error('仅支持 png/jpg/gif/webp 图片');
+  if(file.size > 5 * 1024 * 1024) throw new Error('图片大小不能超过 5MB');
+  let blob = file;
+  if(file.type !== 'image/gif'){
+    const bmp = await createImageBitmap(file);
+    const max = 1600;
+    const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
+    const w = Math.max(1, Math.round(bmp.width * scale));
+    const h = Math.max(1, Math.round(bmp.height * scale));
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    cv.getContext('2d').drawImage(bmp, 0, 0, w, h);
+    blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.85));
+    bmp.close();
+  }
+  const dataUrl = await new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result));
+    fr.onerror = reject;
+    fr.readAsDataURL(blob);
+  });
+  const r = await fetch('/api/upload', { method: 'POST', body: JSON.stringify({ data: dataUrl }), headers: { 'Content-Type': 'application/json' } });
+  const j = await r.json().catch(() => ({}));
+  if(!r.ok) throw new Error(j.error || '上传失败');
+  return j.url;
+}
+function bindImageBtn(btn, ta){
+  btn.addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'image/png,image/jpeg,image/gif,image/webp';
+    input.onchange = async () => {
+      const f = input.files && input.files[0]; if(!f) return;
+      setBtnLoading(btn, true);
+      try {
+        const url = await uploadImage(f);
+        insertImageMarkdown(ta, `![图片](${url})`);
+        toast('图片已上传并插入');
+      } catch(e){
+        toast(e.message || '上传失败', true);
+      } finally {
+        setBtnLoading(btn, false);
+      }
+    };
+    input.click();
+  });
+}
+function bindDropImage(area, ta){
+  area.addEventListener('dragover', e => { e.preventDefault(); area.classList.add('drag-over'); });
+  area.addEventListener('dragleave', () => area.classList.remove('drag-over'));
+  area.addEventListener('drop', async e => {
+    e.preventDefault(); area.classList.remove('drag-over');
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if(f && /^image\//.test(f.type)){
+      area.classList.add('uploading');
+      try {
+        const url = await uploadImage(f);
+        insertImageMarkdown(ta, `![图片](${url})`);
+        toast('图片已上传并插入');
+      } catch(err){
+        toast(err.message || '上传失败', true);
+      } finally {
+        area.classList.remove('uploading');
+      }
+    }
+  });
 }
 
 /* ---------- 启动 ---------- */
@@ -135,8 +262,10 @@ function enterShell(){
   $('#authView').classList.add('hidden');
   $('#shell').classList.remove('hidden');
   renderSideAccount();
+  bindResponsiveUI();
   bindNav();
   bindChat();
+  connectChat();
   refreshNotifBadge();
   viewHome();
 }
@@ -155,6 +284,11 @@ function bindNav(){
   $$('#sideNav button').forEach(b => b.addEventListener('click', () => {
     const v = b.dataset.view;
     setNav(v);
+    const mask = $('#sideMask');
+    if(mask && mask.classList.contains('open')){
+      document.querySelector('.sidebar').classList.remove('open');
+      mask.classList.remove('open');
+    }
     if(v==='home') viewHome();
     else if(v==='topics') viewTopics();
     else if(v==='games') viewGames();
@@ -171,11 +305,12 @@ function bindNav(){
 
 /* ---------- 帖子列表 ---------- */
 function postCard(t){
-  return `<article class="post-card" data-action="open-topic" data-id="${t.id}">
+  const admin = me && me.role === 'admin';
+  return `<article class="post-card${t.closed?' closed':''}" data-action="open-topic" data-id="${t.id}">
     <div class="post-thumb">${catEmoji(t.category)}</div>
     <div class="post-body">
-      <h3 class="post-title">${esc(t.title)}</h3>
-      <p class="post-excerpt">${esc(t.body)}</p>
+      <h3 class="post-title">${t.pinned?'📌 ':''}${esc(t.title)}</h3>
+      <p class="post-excerpt">${esc(cardText(t.body))}</p>
       <div class="post-foot">
         <span class="pill">${esc(t.category)}</span>
         <span class="poster">${avatarImg(t.username)} ${esc(t.username)}</span>
@@ -185,6 +320,11 @@ function postCard(t){
           <span class="stat"><span class="fire">🔥</span><b>${t.replies||0}</b></span>
         </span>
       </div>
+      ${admin ? `<div class="admin-ops">
+        <button class="mini-btn" data-action="admin-pin" data-id="${t.id}" data-pinned="${t.pinned?1:0}" data-closed="${t.closed?1:0}" title="置顶 / 取消置顶">${t.pinned?'📌 取消置顶':'📌 置顶'}</button>
+        <button class="mini-btn" data-action="admin-close" data-id="${t.id}" data-pinned="${t.pinned?1:0}" data-closed="${t.closed?1:0}" title="关闭 / 开放回复">${t.closed?'🔓 开放回复':'🔒 关闭回复'}</button>
+        <button class="mini-btn danger" data-action="admin-delete" data-id="${t.id}" title="删除帖子">🗑 删除</button>
+      </div>` : ''}
     </div>
   </article>`;
 }
@@ -200,6 +340,9 @@ function filterBar(){
     </select>
   </div>`;
 }
+function cardText(s){
+  return String(s||'').replace(/```[\s\S]*?```/g, ' ').replace(/!\[[^\]]*\]\([^)]*\)/g, '[图片]').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/[#>*`-]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+}
 async function loadTopics(params = ''){
   let qs = `sort=${currentSort}`;
   if(currentFilter !== '全部') qs += `&category=${encodeURIComponent(currentFilter)}`;
@@ -208,12 +351,30 @@ async function loadTopics(params = ''){
   return api('/api/topics?' + qs);
 }
 async function viewTopics(){
-  const data = await loadTopics();
+  topicPage = 1;
+  const data = await loadTopics(`&page=${topicPage}&pageSize=${TOPIC_PAGE_SIZE}`);
+  topicTotal = data.total || data.topics.length;
   $('#view').innerHTML = `
     <div class="filter-bar">${filterBar()}</div>
-    ${currentSearch ? `<p class="meta">搜索“${esc(currentSearch)}”的结果（${data.topics.length} 条）</p>` : ''}
-    <div class="post-list" id="postList">${data.topics.map(postCard).join('') || '<p class="empty-tip">还没有帖子，来发第一个吧。</p>'}</div>`;
+    ${currentSearch ? `<p class="meta">搜索“${esc(currentSearch)}”的结果（共 ${topicTotal} 条）</p>` : ''}
+    <div class="post-list" id="postList">${data.topics.map(postCard).join('') || '<p class="empty-tip">还没有帖子，来发第一个吧。</p>'}</div>
+    <div id="topicPages"></div>`;
   $('#sortSelect').addEventListener('change', e => { currentSort = e.target.value; viewTopics(); });
+  renderTopicPages();
+}
+function renderTopicPages(){
+  const totalPages = Math.max(Math.ceil(topicTotal / TOPIC_PAGE_SIZE), 1);
+  const el = $('#topicPages');
+  if(!el) return;
+  if(totalPages <= 1){ el.innerHTML = ''; return; }
+  const nums = [];
+  for(let p = 1; p <= totalPages; p++){
+    if(totalPages > 9 && p > 3 && p < totalPages - 2) continue;
+    if(p === 4 && totalPages > 9) nums.push('<span class="page-ellipsis">…</span>');
+    nums.push(`<button class="page-btn ${p===topicPage?'active':''}" data-action="topic-page" data-page="${p}">${p}</button>`);
+    if(p === totalPages - 3 && totalPages > 9) nums.push('<span class="page-ellipsis">…</span>');
+  }
+  el.innerHTML = `<div class="pager">${nums.join('')}</div>`;
 }
 async function viewHome(){
   setNav('home');
@@ -240,32 +401,48 @@ async function viewResources(){
 }
 
 /* ---------- 话题详情 ---------- */
-async function openTopic(id){
-  const t = await api('/api/topics/' + id);
+async function openTopic(id, page = 1){
+  const t = await api(`/api/topics/${id}?page=${page}&pageSize=${REPLY_PAGE_SIZE}`);
+  const totalPages = Math.max(Math.ceil(t.replyTotal / REPLY_PAGE_SIZE), 1);
+  const pagesHtml = totalPages > 1
+    ? `<div class="pager">${Array.from({length: totalPages}, (_, i) => `<button class="page-btn ${i+1===t.replyPage?'active':''}" data-action="reply-page" data-id="${t.id}" data-page="${i+1}">${i+1}</button>`).join('')}</div>`
+    : '';
   $('#view').innerHTML = `
     <div class="panel topic-detail">
       <div class="row"><button class="ghost" data-action="go-topics">← 返回</button></div>
       <h1>${catEmoji(t.category)} ${esc(t.title)}</h1>
       <div class="meta">${avatarImg(t.username)} ${esc(t.username)} · ${new Date(t.created).toLocaleString()} · <span class="pill">${esc(t.category)}</span></div>
-      <p class="pre-wrap">${esc(t.body)}</p>
+      <div class="markdown-body">${renderMarkdown(t.body)}</div>
       <div class="actions-bar">
         <button class="ghost like-btn ${t.liked?'liked':''}" data-action="like" data-id="${t.id}">❤ ${t.likes}</button>
         <button class="ghost fav-btn ${t.faved?'faved':''}" data-action="fav" data-id="${t.id}">⭐ ${t.faved?'已收藏':'收藏'}</button>
       </div>
+      ${me && me.role === 'admin' ? `<div class="admin-bar">
+        <span class="pill ${t.pinned?'':'muted'}">${t.pinned?'📌 已置顶':'未置顶'}</span>
+        <span class="pill ${t.closed?'':'muted'}">${t.closed?'🔒 已关闭回复':'开放回复'}</span>
+        <button class="mini-btn" data-action="admin-pin" data-id="${t.id}" data-pinned="${t.pinned?1:0}" data-closed="${t.closed?1:0}">${t.pinned?'取消置顶':'置顶'}</button>
+        <button class="mini-btn" data-action="admin-close" data-id="${t.id}" data-pinned="${t.pinned?1:0}" data-closed="${t.closed?1:0}">${t.closed?'开放回复':'关闭回复'}</button>
+        <button class="mini-btn danger" data-action="admin-delete" data-id="${t.id}">删除帖子</button>
+      </div>` : ''}
       <hr class="divider">
-      <h3>💬 回复（${t.replies.length}）</h3>
+      <h3>💬 回复（${t.replyTotal}）</h3>
       <div id="replyList">${t.replies.map(r => `
         <div class="reply-item">
           <div class="rhead">${avatarImg(r.username)} <b>${esc(r.username)}</b> <span class="meta">${new Date(r.created).toLocaleString()}</span></div>
-          <div class="pre-wrap">${esc(r.body)}</div>
+          <div class="markdown-body">${renderMarkdown(r.body)}</div>
         </div>`).join('') || '<p class="meta">还没有回复。</p>'}</div>
+      ${pagesHtml}
       <div class="field"><label>写下回复…</label><textarea id="replyBody" rows="3"></textarea></div>
+      <div class="field row"><button type="button" class="mini-btn" id="replyImgBtn">🖼️ 图片</button><span class="meta">支持 Markdown 与拖拽图片</span></div>
       <div class="form-actions"><button class="primary" id="sendReply">发送回复</button></div>
     </div>`;
+  bindImageBtn($('#replyImgBtn'), $('#replyBody'));
+  bindDropImage($('#replyBody'), $('#replyBody'));
   $('#sendReply').addEventListener('click', async () => {
     try {
       await api('/api/topics/' + id + '/replies', {method:'POST', body:JSON.stringify({body:$('#replyBody').value})});
-      openTopic(id);
+      const last = Math.max(Math.ceil(t.replyTotal / REPLY_PAGE_SIZE), 1);
+      openTopic(id, last);
     } catch(e){ toast(e.message, true); }
   });
 }
@@ -277,8 +454,11 @@ function openNewTopic(){
     <p class="meta">分享你的游戏、故事或问题。</p>
     <div class="field"><label>标题</label><input id="ntTitle" maxlength="100" placeholder="一句话说清楚"></div>
     <div class="field"><label>分类</label><select id="ntCat"><option>游戏讨论</option><option>心得分享</option><option>求助提问</option><option>独立游戏</option><option>趣味闲聊</option><option>玩家创作</option><option>资源分享</option></select></div>
-    <div class="field"><label>内容</label><textarea id="ntBody" rows="7" placeholder="写点什么…"></textarea></div>
+    <div class="field"><label>内容</label><textarea id="ntBody" rows="7" placeholder="写点什么…（支持 Markdown）"></textarea></div>
+    <div class="field row"><button type="button" class="mini-btn" id="ntImgBtn">🖼️ 图片</button><span class="meta">支持 Markdown 与拖拽图片</span></div>
     <div class="form-actions"><button class="primary" id="ntSubmit">发布</button><button class="ghost" data-action="close-modal">取消</button></div>`, 'newTopic');
+  bindImageBtn($('#ntImgBtn'), $('#ntBody'));
+  bindDropImage($('#ntBody'), $('#ntBody'));
   $('#ntSubmit').addEventListener('click', async () => {
     try {
       await api('/api/topics', {method:'POST', body:JSON.stringify({title:$('#ntTitle').value, category:$('#ntCat').value, body:$('#ntBody').value})});
@@ -470,9 +650,14 @@ document.addEventListener('click', e => {
   if(action === 'open-topic') openTopic(el.dataset.id);
   else if(action === 'filter'){ currentFilter = el.dataset.filter; viewTopics(); }
   else if(action === 'go-topics') viewTopics();
+  else if(action === 'topic-page'){ topicPage = Number(el.dataset.page); viewTopics(); }
+  else if(action === 'reply-page') openTopic(el.dataset.id, Number(el.dataset.page));
   else if(action === 'like') doLike(el);
   else if(action === 'fav') doFav(el);
   else if(action === 'event-join') doEventJoin(el);
+  else if(action === 'admin-pin') doAdminPin(el);
+  else if(action === 'admin-close') doAdminClose(el);
+  else if(action === 'admin-delete') doAdminDelete(el);
   else if(action === 'emoji'){ const inp = $('#chatInput'); inp.value += el.dataset.e; inp.focus(); $('#emojiPop').classList.add('hidden'); }
   else if(action === 'close-modal') closeModal();
 });
@@ -497,6 +682,104 @@ async function doEventJoin(btn){
     toast(d.joined ? '已参加活动' : '已取消参加');
     viewEvents();
   } catch(e){ toast(e.message, true); }
+}
+
+/* ---------- 管理员操作 ---------- */
+async function adminPatchTopic(id, patch){
+  return api('/api/topics/' + id, {method:'PATCH', body:JSON.stringify({pinned:!!patch.pinned, closed:!!patch.closed})});
+}
+function currentViewName(){
+  const active = $('#sideNav button.active');
+  return active ? active.dataset.view : 'topics';
+}
+function refreshAfterAdmin(opts = {}){
+  const inDetail = !!document.querySelector('.topic-detail');
+  if(inDetail && !opts.deleted){ openTopic(opts.id); return; }
+  const v = currentViewName();
+  if(v === 'home') viewHome();
+  else if(v === 'favorites') viewFavorites();
+  else if(v === 'creations') viewCreations();
+  else if(v === 'resources') viewResources();
+  else if(v === 'profile') viewProfile();
+  else viewTopics();
+}
+async function doAdminPin(btn){
+  try {
+    const id = btn.dataset.id;
+    const cur = { pinned: btn.dataset.pinned === '1', closed: btn.dataset.closed === '1' };
+    await adminPatchTopic(id, { pinned: !cur.pinned, closed: cur.closed });
+    toast(cur.pinned ? '已取消置顶' : '已置顶');
+    refreshAfterAdmin({ id });
+  } catch(e){ toast(e.message, true); }
+}
+async function doAdminClose(btn){
+  try {
+    const id = btn.dataset.id;
+    const cur = { pinned: btn.dataset.pinned === '1', closed: btn.dataset.closed === '1' };
+    await adminPatchTopic(id, { pinned: cur.pinned, closed: !cur.closed });
+    toast(cur.closed ? '已开放回复' : '已关闭回复');
+    refreshAfterAdmin({ id });
+  } catch(e){ toast(e.message, true); }
+}
+async function doAdminDelete(btn){
+  const ok = window.confirm('确定删除这个帖子吗？删除后不可恢复。');
+  if(!ok) return;
+  try {
+    await api('/api/topics/' + btn.dataset.id, {method:'DELETE'});
+    toast('帖子已删除');
+    refreshAfterAdmin({ deleted: true });
+  } catch(e){ toast(e.message, true); }
+}
+
+/* ---------- 图片上传 UI 增强 ---------- */
+function insertImageMarkdown(ta, md){
+  ta.focus();
+  const start = ta.selectionStart, end = ta.selectionEnd;
+  const before = ta.value.slice(0, start), after = ta.value.slice(end);
+  const needLf = before && !/\n$/.test(before);
+  const insert = (needLf ? '\n' : '') + md + '\n';
+  ta.value = before + insert + after;
+  const pos = start + insert.length;
+  ta.selectionStart = ta.selectionEnd = pos;
+}
+function setBtnLoading(btn, loading){
+  if(!btn) return;
+  btn.disabled = loading;
+  btn.classList.toggle('loading', loading);
+  btn.textContent = loading ? '⏳ 上传中…' : '🖼️ 图片';
+}
+
+/* ---------- 响应式 UI 绑定 ---------- */
+function bindResponsiveUI(){
+  const sidebar = document.querySelector('.sidebar');
+  const mask = $('#sideMask');
+  const openSide = () => { sidebar.classList.add('open'); mask.classList.add('open'); };
+  const closeSide = () => { sidebar.classList.remove('open'); mask.classList.remove('open'); };
+  $('#menuBtn').addEventListener('click', openSide);
+  if(mask) mask.addEventListener('click', closeSide);
+  $('#chatCloseBtn').addEventListener('click', () => {
+    $('#chatPanel').classList.remove('open');
+    $('#chatToggleBtn').classList.add('show');
+  });
+  $('#chatToggleBtn').addEventListener('click', () => {
+    $('#chatPanel').classList.add('open');
+    $('#chatToggleBtn').classList.remove('show');
+  });
+  const syncChatFab = () => {
+    const narrow = window.innerWidth <= 1024;
+    const open = $('#chatPanel').classList.contains('open');
+    $('#chatToggleBtn').classList.toggle('show', narrow && !open);
+  };
+  window.addEventListener('resize', () => {
+    if(window.innerWidth > 860) closeSide();
+    if(window.innerWidth > 1024){
+      $('#chatPanel').classList.remove('open');
+      $('#chatToggleBtn').classList.remove('show');
+    } else {
+      syncChatFab();
+    }
+  });
+  syncChatFab();
 }
 
 boot();

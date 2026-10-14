@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -9,6 +9,8 @@ import { WebSocketServer, WebSocket } from 'ws';
 const root = dirname(fileURLToPath(import.meta.url));
 const data = resolve(process.env.DATA_DIR || resolve(root, 'data'));
 mkdirSync(data, { recursive: true });
+const uploads = resolve(root, 'uploads');
+mkdirSync(uploads, { recursive: true });
 
 const db = new DatabaseSync(resolve(data, 'forum.sqlite'));
 db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
@@ -81,11 +83,11 @@ function presence(){
 function eject(id){ for(const s of sockets) if(s.user.id === id) s.close(1008, '会话已失效'); }
 function text(v, min, max){ if(typeof v !== 'string' || v.trim().length < min || v.length > max) throw Error(`内容长度须为 ${min}–${max} 字符`); return v.trim(); }
 function out(res, status, obj, headers = {}){ res.writeHead(status, { 'Content-Type':'application/json; charset=utf-8', 'Cache-Control':'no-store', ...headers }); res.end(JSON.stringify(obj)); }
-async function body(req){
+async function body(req, maxBytes = 32768){
   let result = '';
   for await(const chunk of req){
     result += chunk;
-    if(Buffer.byteLength(result) > 32768){ const e = Error('请求内容过长'); e.status = 413; throw e; }
+    if(Buffer.byteLength(result) > maxBytes){ const e = Error('请求内容过长'); e.status = 413; throw e; }
   }
   try { return JSON.parse(result || '{}'); } catch { throw Error('请求格式不正确'); }
 }
@@ -112,16 +114,18 @@ function topicList(u, qs){
   let order = 't.pinned DESC, t.created DESC';
   if(qs.sort === 'replies') order = 't.pinned DESC, COALESCE((SELECT MAX(r.created) FROM replies r WHERE r.topic_id = t.id), t.created) DESC';
   else if(qs.sort === 'likes') order = 't.pinned DESC, (SELECT COUNT(*) FROM likes l WHERE l.topic_id = t.id) DESC, t.created DESC';
-  const limitN = Math.min(Math.max(Number(qs.limit) || 100, 1), 200);
+  const page = Math.max(Number(qs.page) || 1, 1);
+  const pageSize = Math.min(Math.max(Number(qs.pageSize) || Number(qs.limit) || 20, 1), 50);
+  const total = get(`SELECT COUNT(*) AS c FROM topics t JOIN users u ON t.user_id = u.id ${whereSql}`, ...args).c;
   const rows = all(`SELECT t.*, u.username,
       (SELECT COUNT(*) FROM replies r WHERE r.topic_id = t.id) AS replies,
       (SELECT COUNT(*) FROM likes l WHERE l.topic_id = t.id) AS likes
     FROM topics t JOIN users u ON t.user_id = u.id ${whereSql}
-    ORDER BY ${order} LIMIT ${limitN}`, ...args);
+    ORDER BY ${order} LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`, ...args);
   const uId = u ? u.id : 0;
   const likedSet = new Set(all('SELECT topic_id FROM likes WHERE user_id=?', uId).map(r => r.topic_id));
   const favedSet = new Set(all('SELECT topic_id FROM favorites WHERE user_id=?', uId).map(r => r.topic_id));
-  return rows.map(t => ({ ...t, liked: likedSet.has(t.id), faved: favedSet.has(t.id) }));
+  return { topics: rows.map(t => ({ ...t, liked: likedSet.has(t.id), faved: favedSet.has(t.id) })), total, page, pageSize };
 }
 
 /* ---------- HTTP 服务 ---------- */
@@ -136,6 +140,16 @@ const server = http.createServer(async (req, res) => {
     const qs = Object.fromEntries(url.searchParams);
 
     if(!path.startsWith('/api/')){
+      if(path.startsWith('/uploads/')){
+        const name = path.slice('/uploads/'.length);
+        if(!/^[a-f0-9]{16}\.(png|jpg|jpeg|gif|webp)$/i.test(name) || !existsSync(resolve(uploads, name)))
+          return out(res, 404, { error: '图片不存在' });
+        res.writeHead(200, {
+          'Content-Type': name.endsWith('.png') ? 'image/png' : name.endsWith('.gif') ? 'image/gif' : name.endsWith('.webp') ? 'image/webp' : 'image/jpeg',
+          'Cache-Control': 'public, max-age=31536000, immutable'
+        });
+        return res.end(readFileSync(resolve(uploads, name)));
+      }
       const files = { '/':'index.html', '/app.js':'app.js', '/style.css':'style.css', '/campfire.png':'campfire.png' };
       const file = files[path];
       if(!file || !existsSync(resolve(root, 'public', file))) return out(res, 404, { error: '页面不存在' });
@@ -191,6 +205,20 @@ const server = http.createServer(async (req, res) => {
       return out(res, 200, { ok: true }, { 'Set-Cookie':'session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' });
     }
 
+    /* --- 图片上传 --- */
+    if(path === '/api/upload' && method === 'POST'){
+      limit(u.id + ':upload', 30, 60000);
+      const b = await body(req, 8 * 1024 * 1024);
+      const m = /^data:(image\/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(b.data || ''));
+      if(!m) throw Error('仅支持 png/jpg/gif/webp 图片');
+      const ext = m[1] === 'image/png' ? 'png' : m[1] === 'image/gif' ? 'gif' : m[1] === 'image/webp' ? 'webp' : 'jpg';
+      const buf = Buffer.from(m[2], 'base64');
+      if(!buf.length || buf.length > 5 * 1024 * 1024) throw Error('图片大小须在 5MB 以内');
+      const name = randomBytes(8).toString('hex') + '.' + ext;
+      writeFileSync(resolve(uploads, name), buf);
+      return out(res, 201, { url: '/uploads/' + name });
+    }
+
     if(path.startsWith('/api/admin/') && u.role !== 'admin') return out(res, 403, { error: '需要管理员权限' });
 
     /* --- 管理：邀请码 --- */
@@ -227,7 +255,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     /* --- 话题 --- */
-    if(path === '/api/topics' && method === 'GET') return out(res, 200, { topics: topicList(u, qs) });
+    if(path === '/api/topics' && method === 'GET') return out(res, 200, topicList(u, qs));
     if(path === '/api/topics' && method === 'POST'){
       limit(u.id + ':topic', 10, 60000);
       const b = await body(req);
@@ -241,12 +269,16 @@ const server = http.createServer(async (req, res) => {
       if(!t) return out(res, 404, { error: '话题不存在' });
       if(method === 'GET'){
         const likesCount = get('SELECT COUNT(*) AS c FROM likes WHERE topic_id=?', id).c;
+        const replyPage = Math.max(Number(qs.page) || 1, 1);
+        const replyPageSize = Math.min(Math.max(Number(qs.pageSize) || 20, 1), 50);
+        const replyTotal = get('SELECT COUNT(*) AS c FROM replies WHERE topic_id=?', id).c;
         return out(res, 200, {
           ...t,
           likes: likesCount,
           liked: !!get('SELECT id FROM likes WHERE topic_id=? AND user_id=?', id, u.id),
           faved: !!get('SELECT id FROM favorites WHERE topic_id=? AND user_id=?', id, u.id),
-          replies: all('SELECT r.*,u.username FROM replies r JOIN users u ON u.id=r.user_id WHERE topic_id=? ORDER BY r.created LIMIT 500', id)
+          replyPage, replyPageSize, replyTotal,
+          replies: all('SELECT r.*,u.username FROM replies r JOIN users u ON u.id=r.user_id WHERE topic_id=? ORDER BY r.created LIMIT ? OFFSET ?', id, replyPageSize, (replyPage - 1) * replyPageSize)
         });
       }
       if(u.id !== t.user_id && u.role !== 'admin') return out(res, 403, { error: '无权管理此话题' });

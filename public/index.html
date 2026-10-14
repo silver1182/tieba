@@ -58,6 +58,7 @@
 
   <div class="main-col">
     <header class="topbar glass">
+      <button class="icon-btn menu-btn" id="menuBtn" type="button" title="菜单" aria-label="打开菜单">☰</button>
       <div class="brand">
         <span class="brand-mark">✦</span>
         <div>
@@ -76,12 +77,14 @@
     <main class="content" id="view"></main>
   </div>
 
+  <div class="side-mask" id="sideMask"></div>
   <aside class="chat-panel glass" id="chatPanel">
     <div class="chat-head">
       <div>
         <h2 class="chat-title">🔥 篝火聊天室</h2>
         <p class="chat-online"><span class="dot"></span><span id="onlineCount">0</span> 人在线</p>
       </div>
+      <button class="icon-btn chat-close" id="chatCloseBtn" type="button" title="收起聊天室" aria-label="收起聊天室">✕</button>
     </div>
     <div class="chat-messages" id="chatMessages"></div>
     <div class="emoji-pop hidden" id="emojiPop"></div>
@@ -103,6 +106,7 @@
 
 <div id="toast"></div>
 <div id="modalRoot"></div>
+<button class="icon-btn chat-fab" id="chatToggleBtn" type="button" title="打开聊天室" aria-label="打开聊天室">💬</button>
 <script src="/app.js"></script>
 </body>
 </html>
