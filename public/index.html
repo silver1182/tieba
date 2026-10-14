@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Campfire Arcade · 篝火社区</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<!-- ===== 登录 / 注册页 ===== -->
+<section id="authView" class="auth-wrap hidden">
+  <div class="auth-bg" aria-hidden="true">
+    <div class="night-sky">
+      <span class="star s1"></span><span class="star s2"></span><span class="star s3"></span>
+      <span class="star s4"></span><span class="star s5"></span><span class="star s6"></span>
+      <span class="moon"></span>
+    </div>
+    <div class="campfire-scene">
+      <div class="tent"></div>
+      <div class="fire">
+        <span class="flame f1"></span><span class="flame f2"></span><span class="flame f3"></span>
+        <span class="log l1"></span><span class="log l2"></span>
+      </div>
+      <div class="figure fig1"></div><div class="figure fig2"></div><div class="figure fig3"></div>
+      <div class="hills"></div>
+    </div>
+  </div>
+  <div class="auth-card glass" id="authCard"></div>
+</section>
+
+<!-- ===== 主界面 ===== -->
+<div id="shell" class="shell hidden">
+  <aside class="sidebar glass">
+    <div class="side-brand">
+      <div class="side-logo">✦</div>
+      <div>
+        <div class="side-title">Campfire Arcade</div>
+        <div class="side-sub">游戏点燃更多相遇</div>
+      </div>
+    </div>
+    <nav class="side-nav" id="sideNav">
+      <button data-view="home" class="active"><span class="nav-ico">🔥</span>首页</button>
+      <button data-view="topics"><span class="nav-ico">💬</span>最近的讨论</button>
+      <button data-view="games"><span class="nav-ico">🎮</span>发现游戏</button>
+      <button data-view="creations"><span class="nav-ico">🎨</span>玩家创作</button>
+      <button data-view="events"><span class="nav-ico">📅</span>活动日历</button>
+      <button data-view="resources"><span class="nav-ico">📦</span>资源分享</button>
+      <button data-view="favorites"><span class="nav-ico">⭐</span>我的收藏</button>
+      <button data-view="notifications"><span class="nav-ico">🔔</span>消息通知<span class="badge hidden" id="notifBadge"></span></button>
+      <button data-view="profile"><span class="nav-ico">👤</span>个人资料</button>
+    </nav>
+    <div class="side-foot">
+      <div id="sideAccount"></div>
+      <button class="ghost full" id="logoutBtn">退出登录</button>
+    </div>
+  </aside>
+
+  <div class="main-col">
+    <header class="topbar glass">
+      <div class="brand">
+        <span class="brand-mark">✦</span>
+        <div>
+          <h1 class="brand-name">Campfire Arcade</h1>
+          <p class="brand-sub">游戏点燃更多相遇 · 深夜篝火旁的私人社区</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <div class="search-box">
+          <span class="search-ico">⌕</span>
+          <input id="searchInput" type="text" placeholder="搜索话题、游戏或用户...">
+        </div>
+        <button class="primary" id="newTopicBtn">✎ 发起话题</button>
+      </div>
+    </header>
+    <main class="content" id="view"></main>
+  </div>
+
+  <aside class="chat-panel glass" id="chatPanel">
+    <div class="chat-head">
+      <div>
+        <h2 class="chat-title">🔥 篝火聊天室</h2>
+        <p class="chat-online"><span class="dot"></span><span id="onlineCount">0</span> 人在线</p>
+      </div>
+    </div>
+    <div class="chat-messages" id="chatMessages"></div>
+    <div class="emoji-pop hidden" id="emojiPop"></div>
+    <div class="chat-input">
+      <button class="icon-btn" id="emojiBtn" title="表情">😊</button>
+      <input id="chatInput" type="text" placeholder="聊点什么吧..." maxlength="2000" autocomplete="off">
+      <button class="send-btn" id="chatSend" title="发送">➤</button>
+    </div>
+    <div class="chat-event glass">
+      <div class="event-inner">
+        <span class="event-tag">社区活动</span>
+        <span id="eventTitle">周末游戏之夜</span>
+        <span class="event-time" id="eventTime">--</span>
+        <button class="mini-btn" id="eventJoinBtn">我要参加</button>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<div id="toast"></div>
+<div id="modalRoot"></div>
+<script src="/app.js"></script>
+</body>
+</html>
