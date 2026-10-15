@@ -11,6 +11,43 @@ AIGC:
 
 # CHANGELOG
 
+## Unreleased（未发布）
+
+> 以下改动仅存在于本地工作区，**尚未部署到线上服务器**（线上版本落后于本地）。
+
+### 前端
+
+1. **火焰标记去除**
+   - 话题列表回复数旁 🔥 标记移除；分类名 🎈 前缀移除。
+
+2. **个人资料界面重构**
+   - 大头像与名称并排对齐（`.profile-head` 改为 `align-items:flex-start`）。
+   - 称号由自由输入改为预设池选择佩戴（`AVAILABLE_TITLES` + `.title-picks`）。
+   - 头像颜色改为多排纯色块 + 「自动」按钮（`.color-pick.auto`，色块 `border-radius:8px`，移除渐变色盘）。
+
+### 后端 RPG 阶段1
+
+1. **player / items 表迁移**
+   - `player` 表：`user_id` 主键关联 `users`，含 race、level、exp、gold、max_hp、cur_hp、attack、defense、crit_rate、crit_dmg、gold_bonus、daily_count、last_dungeon_date、chapter、boss_kills_ch1/boss_kills_ch2、created。
+   - `items` 表：`id` 自增主键、owner_id、name、type（weapon/armor/accessory/consumable/material/quest）、quality（normal/fine/superb/rare）、stats JSON、location（equipped_weapon/equipped_armor/equipped_accessory/backpack）、quantity、created。
+   - 启动时 `PRAGMA table_info` 检查缺失列并 `ALTER TABLE ADD COLUMN`，不重建表、不丢数据。
+
+2. **属性计算**
+   - `computeStats`：等级基础 + 种族修正 + 装备加成（爆伤加法叠加）。
+   - `calcAttackDamage`：普通伤害 `max(1, 攻-防)`，暴击 × 爆伤倍率，多减伤相乘，向下取整最低 1。
+   - 种族配置：人族 +10 生命/失败金币损失 5%；精灵 +10% 暴击/装备掉落率 +5 个百分点/防御 -1；矮人 +3 防御/Boss 最终伤害 -10%/暴击 -5%；魔族 +4 攻击/生命低于 30% 攻击 +6/失败金币损失 15%。
+
+3. **新增接口**
+   - `POST /api/rpg/character/create`：创建角色（需选择 4 种族之一，重复创建拦截）。
+   - `GET /api/rpg/character`：角色面板（含装备概览）。
+   - `GET /api/rpg/backpack`：背包（装备/消耗品/材料/任务物品四类，金币独立存储）。
+   - `POST /api/rpg/equip`：装备武器/防具/饰品（同部位自动换下）。
+   - `POST /api/rpg/unequip`：卸下装备回到背包。
+
+### 备注
+
+- 本地开发环境另包含 RPG 阶段2（战斗引擎 / 第一章副本 / 自动药水 / 掉落与升级结算）代码与接口，正在自测收尾，未列入本版本发布范围，详见 `TODO.md`。
+
 ## v1.1.0 - 2026-10-14
 
 > 本项目为 Node.js 零框架全栈私人贴吧（Campfire Arcade · 篝火社区）。

@@ -15,8 +15,9 @@ const TOPIC_PAGE_SIZE = 20;
 const REPLY_PAGE_SIZE = 20;
 
 const CAT_EMOJI = {
-  '游戏讨论':'🎮','心得分享':'📖','求助提问':'❓','独立游戏':'🎲','趣味闲聊':'🔥',
-  '玩家创作':'🎨','资源分享':'📦','日常闲聊':'☕','默认':'✦'
+  '游戏讨论':'🎮','心得分享':'📖','求助提问':'❓','独立游戏':'🎲',
+  '玩家创作':'🎨','资源分享':'📦','日常闲聊':'☕','默认':'✦',
+  '趣味闲聊':'🎈'
 };
 const CATEGORIES = ['游戏讨论','心得分享','求助提问','独立游戏','趣味闲聊','玩家创作','资源分享'];
 const FILTERS = ['全部','游戏讨论','心得分享','求助提问','独立游戏','趣味闲聊'];
@@ -38,14 +39,14 @@ async function api(path, opt = {}){
   if(!r.ok) throw new Error(d.error || '请求失败');
   return d;
 }
-function avatarDataUri(name, size = 40){
+function avatarDataUri(name, size = 40, color = ''){
   const colors = ['#f59e0b','#79e1c2','#f472b6','#a78bfa','#60a5fa','#fb923c','#34d399','#f87171','#38bdf8','#c084fc'];
   let h = 0;
   const s = String(name||'?');
   for(const c of s) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  const color = colors[h % colors.length];
+  const c = color || colors[h % colors.length];
   const ch = (s[0] || '?').toUpperCase();
-  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${size}' height='${size}'><rect width='${size}' height='${size}' rx='${Math.round(size*0.25)}' fill='${color}'/><text x='${size/2}' y='${size*0.68}' font-size='${Math.round(size*0.46)}' text-anchor='middle' fill='#fff' font-family='sans-serif' font-weight='bold'>${ch}</text></svg>`;
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${size}' height='${size}'><rect width='${size}' height='${size}' rx='${Math.round(size*0.25)}' fill='${c}'/><text x='${size/2}' y='${size*0.68}' font-size='${Math.round(size*0.46)}' text-anchor='middle' fill='#fff' font-family='sans-serif' font-weight='bold'>${ch}</text></svg>`;
   return 'data:image/svg+xml,' + encodeURIComponent(svg);
 }
 function catEmoji(c){ return CAT_EMOJI[c] || CAT_EMOJI['默认']; }
@@ -59,8 +60,8 @@ function fmtTime(ts){
   if(diff < 7*86400*1000) return Math.floor(diff/86400000) + ' 天前';
   return d.toLocaleDateString();
 }
-function avatarImg(name, cls){
-  return `<img class="avatar ${cls||''}" src="${avatarDataUri(name)}" alt="${esc(name)}">`;
+function avatarImg(name, cls, color, size){
+  return `<img class="avatar ${cls||''}" src="${avatarDataUri(name, size, color)}" alt="${esc(name)}">`;
 }
 
 /* ---------- Markdown 渲染（轻量、XSS 安全） ---------- */
@@ -270,9 +271,25 @@ function enterShell(){
   viewHome();
 }
 function renderSideAccount(){
+  const display = me.display_name || me.username;
+  const roleText = me.role==='admin' ? '管理员' : '成员';
+  const sub = me.title ? `${roleText} · ${esc(me.title)}` : roleText;
   $('#sideAccount').innerHTML = `
-    <div class="who">${avatarImg(me.username)}<div><b>${esc(me.username)}</b><span>${me.role==='admin'?'管理员':'成员'} · 篝火旁</span></div></div>`;
+    <div class="who clickable" id="sideAccountBtn" title="查看个人资料">
+      ${avatarImg(me.username, '', me.avatar_color)}
+      <div><b>${esc(display)}</b><span>${sub}</span></div>
+    </div>`;
+  $('#sideAccountBtn').addEventListener('click', () => {
+    const mask = $('#sideMask');
+    if(mask && mask.classList.contains('open')){
+      document.querySelector('.sidebar').classList.remove('open');
+      mask.classList.remove('open');
+    }
+    setNav('profile');
+    viewProfile();
+  });
   $('#logoutBtn').addEventListener('click', async () => {
+    if (ws) { try { ws.close(); } catch {} }
     try { await api('/api/logout', {method:'POST'}); } catch {}
     location.reload();
   });
@@ -313,11 +330,11 @@ function postCard(t){
       <p class="post-excerpt">${esc(cardText(t.body))}</p>
       <div class="post-foot">
         <span class="pill">${esc(t.category)}</span>
-        <span class="poster">${avatarImg(t.username)} ${esc(t.username)}</span>
+        <span class="poster">${avatarImg(t.username, '', t.avatar_color)} ${esc(t.display_name || t.username)}${t.title ? ` <span class="title-tag">${esc(t.title)}</span>` : ''}</span>
         <span class="meta">${fmtTime(t.created)}</span>
         <span class="stats">
           <span class="stat"><span class="heart">❤</span><b>${t.likes||0}</b></span>
-          <span class="stat"><span class="fire">🔥</span><b>${t.replies||0}</b></span>
+          <span class="stat"><b>${t.replies||0}</b></span>
         </span>
       </div>
       ${admin ? `<div class="admin-ops">
@@ -411,7 +428,7 @@ async function openTopic(id, page = 1){
     <div class="panel topic-detail">
       <div class="row"><button class="ghost" data-action="go-topics">← 返回</button></div>
       <h1>${catEmoji(t.category)} ${esc(t.title)}</h1>
-      <div class="meta">${avatarImg(t.username)} ${esc(t.username)} · ${new Date(t.created).toLocaleString()} · <span class="pill">${esc(t.category)}</span></div>
+      <div class="meta">${avatarImg(t.username, '', t.avatar_color)} ${esc(t.display_name || t.username)}${t.title ? ` <span class="title-tag">${esc(t.title)}</span>` : ''} · ${new Date(t.created).toLocaleString()} · <span class="pill">${esc(t.category)}</span></div>
       <div class="markdown-body">${renderMarkdown(t.body)}</div>
       <div class="actions-bar">
         <button class="ghost like-btn ${t.liked?'liked':''}" data-action="like" data-id="${t.id}">❤ ${t.likes}</button>
@@ -428,7 +445,7 @@ async function openTopic(id, page = 1){
       <h3>💬 回复（${t.replyTotal}）</h3>
       <div id="replyList">${t.replies.map(r => `
         <div class="reply-item">
-          <div class="rhead">${avatarImg(r.username)} <b>${esc(r.username)}</b> <span class="meta">${new Date(r.created).toLocaleString()}</span></div>
+          <div class="rhead">${avatarImg(r.username, '', r.avatar_color)} <b>${esc(r.display_name || r.username)}</b>${r.title ? ` <span class="title-tag">${esc(r.title)}</span>` : ''} <span class="meta">${new Date(r.created).toLocaleString()}</span></div>
           <div class="markdown-body">${renderMarkdown(r.body)}</div>
         </div>`).join('') || '<p class="meta">还没有回复。</p>'}</div>
       ${pagesHtml}
@@ -461,10 +478,10 @@ function openNewTopic(){
   bindDropImage($('#ntBody'), $('#ntBody'));
   $('#ntSubmit').addEventListener('click', async () => {
     try {
-      await api('/api/topics', {method:'POST', body:JSON.stringify({title:$('#ntTitle').value, category:$('#ntCat').value, body:$('#ntBody').value})});
+      const r = await api('/api/topics', {method:'POST', body:JSON.stringify({title:$('#ntTitle').value, category:$('#ntCat').value, body:$('#ntBody').value})});
       closeModal();
       toast('话题已发布');
-      viewHome();
+      openTopic(r.id);
     } catch(e){ toast(e.message, true); }
   });
 }
@@ -532,26 +549,112 @@ async function viewNotifications(){
   const b = $('#readAllBtn');
   if(b) b.addEventListener('click', async () => { await api('/api/notifications/read', {method:'POST'}); refreshNotifBadge(); viewNotifications(); });
 }
+const AVATAR_COLORS = ['#f59e0b','#79e1c2','#f472b6','#a78bfa','#60a5fa','#fb923c','#34d399','#f87171','#38bdf8','#c084fc'];
+const AVAILABLE_TITLES = ['篝火守护者','夜谈常客','话题之星','传火人','摸鱼大师','匿名用户'];
+
 async function viewProfile(){
   setNav('profile');
   const st = await api('/api/my/stats');
   const my = await api('/api/my/topics');
+  const display = me.display_name || me.username;
+  const titleHtml = me.title ? `<span class="title-tag">${esc(me.title)}</span>` : '';
   $('#view').innerHTML = `
     <div class="panel">
-      <div class="profile-head">${avatarImg(me.username, 'lg')}
-        <div><h2 class="no-margin">${esc(me.username)}</h2>
-        <span class="pill ${me.role==='admin'?'':'mint'}">${me.role==='admin'?'管理员':'成员'}</span>
-        <span class="pill muted">${new Date(st.created).toLocaleDateString()} 加入</span>
+      <div class="profile-head">${avatarImg(me.username, 'xl', me.avatar_color, 96)}
+        <div><h2 class="no-margin">${esc(display)} ${titleHtml}</h2>
+        <div class="profile-meta">
+          <span class="pill ${me.role==='admin'?'':'mint'}">${me.role==='admin'?'管理员':'成员'}</span>
+          <span class="pill muted">${new Date(st.created).toLocaleDateString()} 加入</span>
+        </div>
+        <div class="profile-account">账号：${esc(me.username)}<span class="acct-note">（账号不可修改）</span></div>
         <div class="profile-num">
           <div class="pn"><b>${st.topics}</b><span>话题</span></div>
           <div class="pn"><b>${st.replies}</b><span>回复</span></div>
           <div class="pn"><b>${st.likes_given}</b><span>获赞</span></div>
           <div class="pn"><b>${st.favorites}</b><span>收藏</span></div>
+        </div>
+        <div class="profile-actions">
+          <button class="primary" id="editProfileBtn">修改资料</button>
+          <button class="ghost" id="changePwBtn">修改密码</button>
         </div></div>
       </div>
     </div>
     <h3 class="section-title">我发起的话题</h3>
     <div class="post-list">${my.topics.map(postCard).join('') || '<p class="empty-tip">还没有发起过话题。</p>'}</div>`;
+  $('#editProfileBtn').addEventListener('click', openEditProfile);
+  $('#changePwBtn').addEventListener('click', openChangePassword);
+}
+
+function openEditProfile(){
+  const titlePool = AVAILABLE_TITLES.includes(me.title) ? AVAILABLE_TITLES : [me.title, ...AVAILABLE_TITLES].filter(Boolean);
+  const titleOptions = [`<button type="button" class="title-pick ${!me.title?'active':''}" data-title="">不佩戴</button>`].concat(
+    titlePool.map(t => `<button type="button" class="title-pick ${me.title===t?'active':''}" data-title="${esc(t)}">${esc(t)}</button>`)
+  ).join('');
+  openModal(`
+    <h2>修改资料</h2>
+    <p class="meta">显示名与称号会展示在社区各处；头像颜色可在预设色块中自选。</p>
+    <div class="field"><label>显示名</label><input id="epName" maxlength="24" placeholder="留空则显示账号名" value="${esc(me.display_name || '')}"></div>
+    <div class="field"><label>称号（选择佩戴）</label>
+      <div class="title-picks" id="epTitles">${titleOptions}</div>
+    </div>
+    <div class="field"><label>头像颜色（选择色块）</label>
+      <div class="color-picks" id="epColors">
+        ${AVATAR_COLORS.map(c => `<button type="button" class="color-pick ${me.avatar_color===c?'active':''}" data-color="${c}" style="background:${c}" title="${c}"></button>`).join('')}
+        <button type="button" class="color-pick auto ${!me.avatar_color?'active':''}" data-color="" title="自动（按名字生成）">自动</button>
+      </div>
+    </div>
+    <div class="form-actions"><button class="primary" id="epSave">保存</button><button class="ghost" data-action="close-modal">取消</button></div>`, 'editProfile');
+  let pickedColor = me.avatar_color || '';
+  let pickedTitle = me.title || '';
+  $('#epColors').addEventListener('click', e => {
+    const b = e.target.closest('.color-pick');
+    if(!b) return;
+    pickedColor = b.dataset.color;
+    $$('#epColors .color-pick').forEach(x => x.classList.toggle('active', x === b));
+  });
+  $('#epTitles').addEventListener('click', e => {
+    const b = e.target.closest('.title-pick');
+    if(!b) return;
+    pickedTitle = b.dataset.title;
+    $$('#epTitles .title-pick').forEach(x => x.classList.toggle('active', x === b));
+  });
+  $('#epSave').addEventListener('click', async () => {
+    try {
+      const name = $('#epName').value.trim();
+      if(name.length > 24) throw new Error('显示名最长 24 个字符');
+      const patch = { avatar_color: pickedColor, title: pickedTitle };
+      if(name !== (me.display_name || '')) patch.display_name = name;
+      const d = await api('/api/my/profile', {method:'PATCH', body: JSON.stringify(patch)});
+      me = d.user;
+      closeModal();
+      toast('资料已更新');
+      renderSideAccount();
+      viewProfile();
+    } catch(e){ toast(e.message, true); }
+  });
+}
+
+function openChangePassword(){
+  openModal(`
+    <h2>修改密码</h2>
+    <p class="meta">输入原密码与新密码，新密码须为 6–128 个字符。</p>
+    <div class="field"><label>原密码</label><input id="pwOld" type="password" autocomplete="current-password" placeholder="请输入原密码"></div>
+    <div class="field"><label>新密码</label><input id="pwNew" type="password" autocomplete="new-password" placeholder="6–128 个字符"></div>
+    <div class="field"><label>确认新密码</label><input id="pwNew2" type="password" autocomplete="new-password" placeholder="再次输入新密码"></div>
+    <div class="form-actions"><button class="primary" id="pwSave">修改密码</button><button class="ghost" data-action="close-modal">取消</button></div>`, 'changePassword');
+  $('#pwSave').addEventListener('click', async () => {
+    const oldP = $('#pwOld').value;
+    const n1 = $('#pwNew').value;
+    const n2 = $('#pwNew2').value;
+    if(!oldP){ toast('请输入原密码', true); return; }
+    if(n1.length < 6 || n1.length > 128){ toast('新密码须为 6–128 个字符', true); return; }
+    if(n1 !== n2){ toast('两次输入的新密码不一致', true); return; }
+    try {
+      await api('/api/my/password', {method:'POST', body: JSON.stringify({old_password: oldP, new_password: n1})});
+      closeModal();
+      toast('密码已修改');
+    } catch(e){ toast(e.message, true); }
+  });
 }
 
 /* ---------- 通知角标 ---------- */
@@ -616,7 +719,7 @@ function addChatMsg(m){
   const own = me && m.user_id === me.id;
   const el = document.createElement('div');
   el.className = 'chat-msg' + (own ? ' own' : '');
-  el.innerHTML = `${avatarImg(m.username)}<div class="chat-bubble"><div class="who"><b>${esc(m.username)}</b><time>${new Date(m.created).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}</time></div><p>${esc(m.body)}</p></div>`;
+  el.innerHTML = `${avatarImg(m.username, '', m.avatar_color)}<div class="chat-bubble"><div class="who"><b>${esc(m.display_name || m.username)}</b>${m.title ? `<span class="title-tag">${esc(m.title)}</span>` : ''}<time>${new Date(m.created).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}</time></div><p>${esc(m.body)}</p></div>`;
   box.appendChild(el);
   box.scrollTop = box.scrollHeight;
 }
