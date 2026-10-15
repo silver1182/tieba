@@ -2,12 +2,14 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: b3d9dfb1989d5de331291901cce023f8_b79ac5c9c8b011f18e0e52540064ee0f
-    ReservedCode1: CCiiVT6nyM90VN2QO0JQee0i0bC6tOAHhrDWHzaxhPTU90PArpCsqE1B+8+mcZGD0OctXKIw2p1HJC2aOWgNpSlv+tYDxWAGba55TTqyLBd5c958qsI122qwXyDtOC/px60l/tCg4WEitOyNHNTsTe737GOkyjMR6FeQLVxEYqvz+rkFguMAFGwULBo=
+    ProduceID: b3d9dfb1989d5de331291901cce023f8_9e1460b2c8b211f18533525400638852
+    ReservedCode1: DeqYerpeZqNLGhHc3ozn+/SWANpSM9tD4LRQe+xqyq9hOH1JUcBZRHIeMiRvei0rcSDolorKfXqSK9xNhrem73nJK4jino1plTYzqTzqh57Cs80rdfDXS0odVISf+3NuDpWqdgOaflCQjrNBt5P6xL1Z+fOmqWlIBwkFrAzgNQgKn0FomhxJJKUNJzI=
     ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: b3d9dfb1989d5de331291901cce023f8_b79ac5c9c8b011f18e0e52540064ee0f
-    ReservedCode2: CCiiVT6nyM90VN2QO0JQee0i0bC6tOAHhrDWHzaxhPTU90PArpCsqE1B+8+mcZGD0OctXKIw2p1HJC2aOWgNpSlv+tYDxWAGba55TTqyLBd5c958qsI122qwXyDtOC/px60l/tCg4WEitOyNHNTsTe737GOkyjMR6FeQLVxEYqvz+rkFguMAFGwULBo=
+    PropagateID: b3d9dfb1989d5de331291901cce023f8_9e1460b2c8b211f18533525400638852
+    ReservedCode2: DeqYerpeZqNLGhHc3ozn+/SWANpSM9tD4LRQe+xqyq9hOH1JUcBZRHIeMiRvei0rcSDolorKfXqSK9xNhrem73nJK4jino1plTYzqTzqh57Cs80rdfDXS0odVISf+3NuDpWqdgOaflCQjrNBt5P6xL1Z+fOmqWlIBwkFrAzgNQgKn0FomhxJJKUNJzI=
 ---
+
+
 
 # tieba 项目未完成任务清单
 
@@ -39,13 +41,14 @@ AIGC:
 - [x] 副本页：章节/次数/事件/自动战斗设置/战报
 - [x] 论坛功能清理：移除发帖/回复/点赞/收藏/活动/通知/游戏页；保留登录注册（邀请码门槛）、个人资料、实时聊天
 
-## RPG 阶段5 —— 部署上线（部分完成：本地验收通过，待部署）
+## RPG 阶段5 —— 部署上线（已完结，已推送）
 
 - [x] 本地自测验收（第一版完成标准）
-- [ ] 上传服务器并重启线上服务（当前线上版本落后于本地；项目内无部署脚本/服务器地址/SSH 凭据，缺少部署信息未上线）
+- [x] 上传服务器并重启线上服务（已部署上线：服务器 101.35.21.147 / dontdie-ai.com，systemd tieba.service + nginx HTTPS，管理员登录验证通过）
 
 ## 长期待办
 
 - [ ] **撤销已暴露的 GitHub PAT（`ghp_` 开头）**：该令牌已在对话中明文出现，应立即在 GitHub 撤销并轮换
 - [ ] 邀请码管理前端界面（当前仅后端接口 + 命令行/API 使用）
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*

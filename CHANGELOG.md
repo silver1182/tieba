@@ -2,12 +2,14 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: b3d9dfb1989d5de331291901cce023f8_b874bb6cc8b011f18e0e52540064ee0f
-    ReservedCode1: GoyiQtSxruh7+9jBO7yxn/LiNm3JC6R23vj9G9dPte1H1MxAvGw8W9aByFUW+3N9fRf6rf/TfTfZ2yfVM4tdTlMn23IEsodTwZ6cmR8km8j3GtwAf91kTIfoKUn78QwDY60YBvyzVAkkBgIOpyCEgbnIc/MGNR6z0uKgUgbUXMWh1R42DtsJOMJq2WY=
+    ProduceID: b3d9dfb1989d5de331291901cce023f8_9ed09ca6c8b211f18e0e52540064ee0f
+    ReservedCode1: ZKWAXHGT9fsqJvUaWMgQZ0Iw9mmF1tlMeCjEOAL/RfHzm2QpIuenQfLw1mII5icLnhLzWeBo5WhiFdqNo9YIfwqeCYrNSCIE5zNut5k+ikfWaBg2gS5kEvyitmb/p6RiBmIOmPmxXAlw4BHyOBtNLubcLhtMzBIUmHBwZ5XvWmi56xwu0XhkLnkegJA=
     ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: b3d9dfb1989d5de331291901cce023f8_b874bb6cc8b011f18e0e52540064ee0f
-    ReservedCode2: GoyiQtSxruh7+9jBO7yxn/LiNm3JC6R23vj9G9dPte1H1MxAvGw8W9aByFUW+3N9fRf6rf/TfTfZ2yfVM4tdTlMn23IEsodTwZ6cmR8km8j3GtwAf91kTIfoKUn78QwDY60YBvyzVAkkBgIOpyCEgbnIc/MGNR6z0uKgUgbUXMWh1R42DtsJOMJq2WY=
+    PropagateID: b3d9dfb1989d5de331291901cce023f8_9ed09ca6c8b211f18e0e52540064ee0f
+    ReservedCode2: ZKWAXHGT9fsqJvUaWMgQZ0Iw9mmF1tlMeCjEOAL/RfHzm2QpIuenQfLw1mII5icLnhLzWeBo5WhiFdqNo9YIfwqeCYrNSCIE5zNut5k+ikfWaBg2gS5kEvyitmb/p6RiBmIOmPmxXAlw4BHyOBtNLubcLhtMzBIUmHBwZ5XvWmi56xwu0XhkLnkegJA=
 ---
+
+
 
 
 
@@ -15,7 +17,7 @@ AIGC:
 
 ## Unreleased（未发布）
 
-> 以下改动仅存在于本地工作区，**尚未部署到线上服务器**（线上版本落后于本地）。
+> 以下改动已部署到线上服务器（dontdie-ai.com，systemd + nginx HTTPS），尚未发布正式版本号。
 
 ### 前端
 
@@ -100,11 +102,19 @@ AIGC:
   - 商店：药水/材料/装备箱购买；交易行：挂单/列表/成交（10% 手续费、买卖双方结算）/取消/已装备不可挂单/不能买自己挂单；
   - WS 实时聊天收发与在线广播。
 - 验收结果：**68/68 全部通过**。
-- 部署状态：项目内**无部署脚本、服务器地址、SSH 凭据、README 部署说明**，线上部署未执行，缺少部署信息详见 `TODO.md`。
+
+### 后端/前端 RPG 阶段5 —— 线上部署上线（通过）
+
+- 服务器：101.35.21.147 / dontdie-ai.com（Ubuntu，Node v24.22.0 nvm，nginx + systemd 目录部署）。
+- 部署方式：systemd 服务 `tieba.service`（`WorkingDirectory=/home/ubuntu/tieba`，`NODE_ENV=production`，`PORT=3001`，`HOST=127.0.0.1`，`PUBLIC_ORIGIN=https://dontdie-ai.com`，`ADMIN_PASSWORD` 环境变量），nginx 反代 443 → 127.0.0.1:3001（Certbot HTTPS，支持 WebSocket 升级）。
+- 代码同步：本地最新代码（`server.mjs` 87KB、`public/` 等 10 个文件）经 SFTP 上传，排除 `node_modules/uploads/data/.git`；旧文件备份为 `server.mjs.bak_*`、`backup_public_*`；`npm install` 确认依赖 up to date（ws 8.22.0）。
+- 重启结果：`systemctl restart tieba.service` 成功（RC=0，PID 1998857），服务监听 127.0.0.1:3001。
+- 登录验证：管理员 `baiwan` 密码重置为项目哈希格式（salt:scrypt）后，本地端口与 HTTPS 域名登录均返回 `{"ok":true}`，带会话 `/api/me` 返回 admin 用户。
+- 线上验证结论：域名首页 HTTPS 200、静态资源 200、登录态接口（topics/games/messages/notifications/admin/invites）全部 200、RPG 角色/背包未创建角色返回业务 404（预期）、WS 未登录 403（预期）/带会话连接成功。
 
 ### 备注
 
-- 阶段2、阶段3、阶段4、阶段5（本地验收）均已本地实现并通过 E2E 自测（阶段3 自测 27/27、阶段4 自测 20/20、阶段5 本地验收 68/68），尚未部署到线上服务器；阶段5 剩余「上传服务器并重启线上服务」待部署信息补齐后执行，详见 `TODO.md`。
+- 阶段2、阶段3、阶段4、阶段5 均已本地实现并通过 E2E 自测（阶段3 自测 27/27、阶段4 自测 20/20、阶段5 本地验收 68/68），阶段5 已完成线上部署（systemd + nginx HTTPS，域名 dontdie-ai.com 可访问，管理员登录验证通过）。
 
 ## v1.1.0 - 2026-10-14
 
@@ -160,5 +170,6 @@ AIGC:
 
 - `server.mjs` 与 `public/app.js` 均通过 `node --check` 语法校验；CSS 括号平衡检查通过。
 - `uploads/` 目录由服务启动时自动创建。
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
