@@ -1,3 +1,6 @@
 node_modules/
 uploads/
 data/
+
+server.out.log
+server.err.log
