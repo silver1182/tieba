@@ -73,6 +73,21 @@ db.exec(`
     created INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_items_owner ON items(owner_id);
+  CREATE TABLE IF NOT EXISTS marketplace (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    seller_id INTEGER NOT NULL,
+    seller_name TEXT NOT NULL DEFAULT '',
+    item_name TEXT NOT NULL,
+    item_type TEXT NOT NULL,
+    item_quality TEXT NOT NULL DEFAULT 'normal',
+    item_stats TEXT NOT NULL DEFAULT '{}',
+    quantity INTEGER NOT NULL DEFAULT 1,
+    price INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    created INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_market_status ON marketplace(status, expires_at);
 `);
 
 /* player 自动药水配置迁移（第 5 节：可关闭 / 改阈值 / 改次数） */
@@ -144,8 +159,8 @@ const ENCOUNTER_CONFIG = {
 };
 
 const CHAPTER_CONFIG = {
-  1: { name:'灰烬森林', normal:['灰牙野狼','腐木妖','林间盗匪'], elite:['黑斑巨狼'], boss:'灰烬狼王', encounters:['采药人','神秘树洞','猎人营地'], equip:CH1_EQUIP, drop:'boss1', normal_mat:['枯木','粗糙皮革'] },
-  2: { name:'沉没矿坑', normal:['矿坑蝙蝠','黑铁傀儡','黑雾祭司'], elite:['黑铁守卫'], boss:'矿坑领主莫拉克', encounters:['被困矿工','黑雾祭坛','地底商人'], equip:CH2_EQUIP, drop:'boss2', normal_mat:['黑铁矿'] }
+  1: { name:'灰烬森林', normal:['灰牙野狼','腐木妖','林间盗匪'], elite:['黑斑巨狼'], boss:'灰烬狼王', encounters:['采药人','神秘树洞','猎人营地'], equip:CH1_EQUIP, drop:'boss1', normal_mat:['枯木','粗糙皮革'], elite_mat:['黑狼牙'], boss_mat:['黑狼牙','黑狼牙'] },
+  2: { name:'沉没矿坑', normal:['矿坑蝙蝠','黑铁傀儡','黑雾祭司'], elite:['黑铁守卫'], boss:'矿坑领主莫拉克', encounters:['被困矿工','黑雾祭坛','地底商人'], equip:CH2_EQUIP, drop:'boss2', normal_mat:['黑铁矿'], elite_mat:['黑铁矿','黑铁矿'], boss_mat:['净化碎片','黑铁矿'] }
 };
 
 /* 掉落概率（第 7 节：普通/优良/精良/稀有） */
@@ -153,10 +168,67 @@ const DROP_TABLE = {
   normal: { normal:0.16, fine:0.07, superb:0.018, rare:0.002 },
   elite:  { normal:0.30, fine:0.18, superb:0.06, rare:0.01 },
   boss1:  { normal:0.30, fine:0.40, superb:0.25, rare:0.05 },
-  boss2:  { normal:0.20, fine:0.35, superb:0.35, rare:0.10 }
+  boss2:  { normal:0.20, fine:0.35, superb:0.35, rare:0.10 },
+  box:    { normal:0.60, fine:0.30, superb:0.08, rare:0.02 }
 };
 
 const POTION_ITEMS = { '小型药水': { heal_pct:30 }, '中型药水': { heal_pct:50 } };
+
+/* ========== RPG 阶段3 配置（第 7 节：铁匠铺 / 商店 / 交易行） ========== */
+/* 材料合成（4 种：低阶材料 → 高阶材料，用于高级装备与药水制作） */
+const CRAFT_MATERIAL = {
+  '精制皮革': { cost:20, ingredients:{ '粗糙皮革':2 } },
+  '精炼黑铁': { cost:30, ingredients:{ '黑铁矿':2 } },
+  '锐利狼牙': { cost:40, ingredients:{ '黑狼牙':2 } },
+  '净化结晶': { cost:50, ingredients:{ '净化碎片':2 } }
+};
+/* 药水制作 */
+const CRAFT_POTION = {
+  '小型药水': { cost:20, ingredients:{ '枯木':2 } },
+  '中型药水': { cost:50, ingredients:{ '精制皮革':1, '黑铁矿':1 } }
+};
+/* 第一章装备制作（固定普通品质） */
+const CRAFT_EQUIP_1 = {
+  '猎人短弓': { cost:60, ingredients:{ '粗糙皮革':2, '枯木':2 } },
+  '狼牙短刃': { cost:50, ingredients:{ '黑狼牙':2 } },
+  '旧皮甲': { cost:50, ingredients:{ '粗糙皮革':3 } },
+  '狼皮护肩': { cost:70, ingredients:{ '粗糙皮革':2, '黑狼牙':1 } },
+  '猎人护符': { cost:40, ingredients:{ '枯木':3 } },
+  '盗匪腰包': { cost:80, ingredients:{ '粗糙皮革':2, '黑狼牙':2 } },
+  '木雕护符': { cost:30, ingredients:{ '枯木':2 } }
+};
+/* 第二章装备制作（固定优良品质，需高阶材料） */
+const CRAFT_EQUIP_2 = {
+  '黑铁战斧': { cost:120, ingredients:{ '黑铁矿':3, '黑狼牙':2 } },
+  '净化法杖': { cost:130, ingredients:{ '净化碎片':2, '黑铁矿':2 } },
+  '黑铁胸甲': { cost:140, ingredients:{ '黑铁矿':3, '黑狼牙':1 } },
+  '矿工重铠': { cost:180, ingredients:{ '黑铁矿':4, '精炼黑铁':1 } },
+  '守卫徽章': { cost:100, ingredients:{ '黑铁矿':2, '净化碎片':1 } },
+  '矿坑领主戒指': { cost:200, ingredients:{ '净化碎片':2, '黑铁矿':2, '精炼黑铁':1 } }
+};
+/* 商店商品 */
+const SHOP_ITEMS = {
+  '小型药水': { type:'consumable', stats:{ heal_pct:30 }, price:20 },
+  '普通装备箱': { type:'equip_box', price:120 },
+  '枯木': { type:'material', price:8 },
+  '粗糙皮革': { type:'material', price:15 },
+  '黑铁矿': { type:'material', price:25 },
+  '黑狼牙': { type:'material', price:30 },
+  '净化碎片': { type:'material', price:35 }
+};
+/* 交易行：24 小时保存、10% 手续费 */
+const MARKET_FEE = 0.10;
+const MARKET_DURATION = 24 * 3600 * 1000;
+/* 地底商人随机商品池（每次出现随机 3 件，只能买 1 件） */
+const MERCHANT_GOODS = [
+  { name:'小型药水', type:'consumable', quality:'normal', stats:{ heal_pct:30 }, price:20 },
+  { name:'中型药水', type:'consumable', quality:'normal', stats:{ heal_pct:50 }, price:60 },
+  { name:'粗糙皮革', type:'material', quality:'normal', stats:{}, price:15 },
+  { name:'黑铁矿', type:'material', quality:'normal', stats:{}, price:25 },
+  { name:'净化碎片', type:'material', quality:'normal', stats:{}, price:35 },
+  { name:'精制皮革', type:'material', quality:'normal', stats:{}, price:50 },
+  { name:'黑铁战斧', type:'weapon', quality:'normal', stats:{ attack:16, crit_dmg:20, crit_rate:-5 }, price:150 }
+];
 
 /* ========== RPG 属性计算（第 2、3 节） ========== */
 function safeJson(s, fb){ try { return JSON.parse(s || '{}'); } catch { return fb; } }
@@ -702,7 +774,13 @@ function generateDungeonEvents(chapter, bossRate){
     } else {
       const en = encPool[encIdx++ % encPool.length];
       const ec = ENCOUNTER_CONFIG[en];
-      events.push({ slot: i + 1, type: 'encounter', name: en, desc: ec.desc, choices: ec.choices });
+      const ev = { slot: i + 1, type: 'encounter', name: en, desc: ec.desc, choices: ec.choices };
+      if(en === '地底商人'){
+        const goods = shuffleArr([...MERCHANT_GOODS]).slice(0, 3);
+        ev.merchantGoods = goods;
+        ev.choices = goods.map(g => '购买「' + g.name + '」（' + g.price + '金币）');
+      }
+      events.push(ev);
     }
   }
   return { events, hasBoss: slots.some(s => s.tier === 'boss') };
@@ -775,12 +853,15 @@ function handleEncounter(playerRow, ev, choice, session){
       if(rollPct(0.50)) res.log.push('研究失败：你被诅咒了');
     }
   } else if(ev.name === '地底商人'){
-    const goods = ['小型药水', '粗糙皮革', '黑铁矿'];
-    const picked = goods[randInt(0, goods.length - 1)];
-    if(picked === '小型药水') addItem(playerRow.user_id, '小型药水', 'consumable', 'normal', { heal_pct: 30 }, 'backpack', 1);
-    else addItem(playerRow.user_id, picked, 'material', 'normal', {}, 'backpack', 1);
-    res.items.push(picked + '×1');
-    res.log.push('从商人处购得 ' + picked + '（每局仅此一次）');
+    const goods = ev.merchantGoods || [];
+    const g = goods[choice - 1];
+    if(!g) throw Error('无效选择');
+    if(playerRow.gold < g.price) throw Error('金币不足，无法购买');
+    playerRow.gold -= g.price;
+    addItem(playerRow.user_id, g.name, g.type, g.quality, g.stats || {}, 'backpack', 1);
+    res.items.push(g.name + '×1');
+    res.gold = -g.price;
+    res.log.push('从地底商人处购得 ' + g.name + '，花费 ' + g.price + ' 金币（每局仅此一次）');
   } else {
     res.log.push('奇遇「' + ev.name + '」发生');
   }
@@ -839,8 +920,13 @@ async function handleDungeonEvent(req, res, u){
       stmt('UPDATE player SET gold=? WHERE user_id=?', p.gold, u.id);
       if(ev.tier === 'boss'){
         s.bossKilled = true;
-        stmt('UPDATE player SET boss_kills_ch1=boss_kills_ch1+1 WHERE user_id=?', u.id);
-        p.boss_kills_ch1++;
+        if(s.chapter === 2){
+          stmt('UPDATE player SET boss_kills_ch2=boss_kills_ch2+1 WHERE user_id=?', u.id);
+          p.boss_kills_ch2++;
+        } else {
+          stmt('UPDATE player SET boss_kills_ch1=boss_kills_ch1+1 WHERE user_id=?', u.id);
+          p.boss_kills_ch1++;
+        }
       }
       s.idx++;
       const done = s.idx >= s.events.length;
@@ -901,12 +987,202 @@ async function handleDungeonSettings(req, res, u){
   return out(res, 200, { ok: true, auto_potion: { enabled: !!enabled, threshold, limit } });
 }
 
+/* ========== 阶段3：铁匠铺 / 商店 / 交易行（第 7 节） ========== */
+function forgeCatalog(){
+  return {
+    material: Object.entries(CRAFT_MATERIAL).map(([name, r]) => ({ name, cost: r.cost, ingredients: r.ingredients })),
+    potion: Object.entries(CRAFT_POTION).map(([name, r]) => ({ name, cost: r.cost, ingredients: r.ingredients })),
+    equip_1: Object.entries(CRAFT_EQUIP_1).map(([name, r]) => ({ name, cost: r.cost, ingredients: r.ingredients, quality: 'normal' })),
+    equip_2: Object.entries(CRAFT_EQUIP_2).map(([name, r]) => ({ name, cost: r.cost, ingredients: r.ingredients, quality: 'fine' }))
+  };
+}
+function scaleIngredients(ingredients, quantity){
+  const outMap = {};
+  for(const [mn, qty] of Object.entries(ingredients)) outMap[mn] = qty * quantity;
+  return outMap;
+}
+function consumeMaterials(ownerId, ingredients){
+  for(const [mn, qty] of Object.entries(ingredients)){
+    let need = qty;
+    const rows = all('SELECT * FROM items WHERE owner_id=? AND name=? AND type=? AND location=?', ownerId, mn, 'material', 'backpack');
+    let got = 0;
+    for(const row of rows) got += row.quantity;
+    if(got < need) throw Error('材料不足：缺少 ' + mn + '×' + (need - got));
+    for(const row of rows){
+      if(need <= 0) break;
+      const take = Math.min(need, row.quantity);
+      consumeItem(ownerId, row.id, take);
+      need -= take;
+    }
+  }
+}
+async function handleForgeMaterial(req, res, u){
+  const b = await body(req);
+  const p = getPlayer(u.id);
+  if(!p) return out(res, 404, { error: '尚未创建角色' });
+  const recipe = CRAFT_MATERIAL[b.recipe];
+  if(!recipe) return out(res, 400, { error: '未知合成配方' });
+  const quantity = Math.max(1, Math.min(99, Number(b.quantity) || 1));
+  const totalCost = recipe.cost * quantity;
+  if(p.gold < totalCost) return out(res, 400, { error: '金币不足' });
+  consumeMaterials(u.id, scaleIngredients(recipe.ingredients, quantity));
+  p.gold -= totalCost;
+  stmt('UPDATE player SET gold=? WHERE user_id=?', p.gold, u.id);
+  addItem(u.id, b.recipe, 'material', 'normal', {}, 'backpack', quantity);
+  return out(res, 201, { ok: true, name: b.recipe, type: 'material', quality: 'normal', quantity, cost: totalCost, gold: p.gold });
+}
+async function handleForgePotion(req, res, u){
+  const b = await body(req);
+  const p = getPlayer(u.id);
+  if(!p) return out(res, 404, { error: '尚未创建角色' });
+  const recipe = CRAFT_POTION[b.recipe];
+  if(!recipe) return out(res, 400, { error: '未知药水配方' });
+  const quantity = Math.max(1, Math.min(99, Number(b.quantity) || 1));
+  const totalCost = recipe.cost * quantity;
+  if(p.gold < totalCost) return out(res, 400, { error: '金币不足' });
+  consumeMaterials(u.id, scaleIngredients(recipe.ingredients, quantity));
+  p.gold -= totalCost;
+  stmt('UPDATE player SET gold=? WHERE user_id=?', p.gold, u.id);
+  addItem(u.id, b.recipe, 'consumable', 'normal', POTION_ITEMS[b.recipe] || {}, 'backpack', quantity);
+  return out(res, 201, { ok: true, name: b.recipe, type: 'consumable', quality: 'normal', quantity, cost: totalCost, gold: p.gold });
+}
+async function handleForgeEquip(req, res, u){
+  const b = await body(req);
+  const p = getPlayer(u.id);
+  if(!p) return out(res, 404, { error: '尚未创建角色' });
+  const r1 = CRAFT_EQUIP_1[b.recipe], r2 = CRAFT_EQUIP_2[b.recipe];
+  const recipe = r1 || r2;
+  if(!recipe) return out(res, 400, { error: '未知装备配方' });
+  const pool = r1 ? CH1_EQUIP : CH2_EQUIP;
+  const proto = pool.find(x => x.name === b.recipe);
+  if(!proto) return out(res, 400, { error: '未知装备' });
+  if(p.gold < recipe.cost) return out(res, 400, { error: '金币不足' });
+  consumeMaterials(u.id, recipe.ingredients);
+  p.gold -= recipe.cost;
+  stmt('UPDATE player SET gold=? WHERE user_id=?', p.gold, u.id);
+  const quality = r1 ? 'normal' : 'fine';
+  addItem(u.id, proto.name, proto.type, quality, proto.stats, 'backpack', 1);
+  return out(res, 201, { ok: true, name: proto.name, type: proto.type, quality, cost: recipe.cost, gold: p.gold, stats: proto.stats });
+}
+async function handleShopItems(req, res, u){
+  return out(res, 200, { items: Object.entries(SHOP_ITEMS).map(([name, it]) => ({ name, type: it.type, price: it.price, stats: it.stats || {} })) });
+}
+async function handleShopBuy(req, res, u){
+  const b = await body(req);
+  const p = getPlayer(u.id);
+  if(!p) return out(res, 404, { error: '尚未创建角色' });
+  const item = SHOP_ITEMS[b.item];
+  if(!item) return out(res, 400, { error: '商品不存在' });
+  const quantity = Math.max(1, Math.min(99, Number(b.quantity) || 1));
+  if(item.type === 'equip_box'){
+    if(p.gold < item.price) return out(res, 400, { error: '金币不足' });
+    p.gold -= item.price;
+    stmt('UPDATE player SET gold=? WHERE user_id=?', p.gold, u.id);
+    const proto = CHAPTER_CONFIG[1].equip[randInt(0, CHAPTER_CONFIG[1].equip.length - 1)];
+    const q = rollDropQuality('box', 0, 0) || 'normal';
+    addItem(u.id, proto.name, proto.type, q, proto.stats, 'backpack', 1);
+    return out(res, 201, { ok: true, box: true, name: proto.name, type: proto.type, quality: q, cost: item.price, gold: p.gold });
+  }
+  const total = item.price * quantity;
+  if(p.gold < total) return out(res, 400, { error: '金币不足' });
+  p.gold -= total;
+  stmt('UPDATE player SET gold=? WHERE user_id=?', p.gold, u.id);
+  if(item.type === 'consumable') addItem(u.id, b.item, 'consumable', 'normal', item.stats || {}, 'backpack', quantity);
+  else if(item.type === 'material') addItem(u.id, b.item, 'material', 'normal', {}, 'backpack', quantity);
+  else return out(res, 400, { error: '未知商品类型' });
+  return out(res, 201, { ok: true, name: b.item, type: item.type, quantity, cost: total, gold: p.gold });
+}
+function orderToPayload(row){
+  return {
+    id: row.id, seller_id: row.seller_id, seller_name: row.seller_name,
+    item_name: row.item_name, item_type: row.item_type, item_quality: row.item_quality,
+    item_stats: safeJson(row.item_stats, {}), quantity: row.quantity, price: row.price,
+    status: row.status, created: row.created, expires_at: row.expires_at
+  };
+}
+async function handleMarketList(req, res, u){
+  const p = getPlayer(u.id);
+  if(!p) return out(res, 404, { error: '尚未创建角色' });
+  stmt('UPDATE marketplace SET status=? WHERE status=? AND expires_at<=?', 'expired', 'active', now());
+  const rows = all('SELECT * FROM marketplace WHERE status=? ORDER BY created DESC LIMIT 100', 'active');
+  return out(res, 200, {
+    fee_rate: MARKET_FEE, duration_hours: 24,
+    orders: rows.map(orderToPayload),
+    my_active: rows.filter(r => r.seller_id === u.id).map(orderToPayload)
+  });
+}
+async function handleMarketCreate(req, res, u){
+  const b = await body(req);
+  const p = getPlayer(u.id);
+  if(!p) return out(res, 404, { error: '尚未创建角色' });
+  const item = get('SELECT * FROM items WHERE id=? AND owner_id=?', Number(b.item_id) || 0, u.id);
+  if(!item) return out(res, 404, { error: '物品不存在' });
+  if(!['weapon','armor','accessory','material'].includes(item.type)) return out(res, 400, { error: '仅装备与材料可挂单交易' });
+  if(item.location !== 'backpack') return out(res, 400, { error: '已装备物品不可交易' });
+  const price = Number(b.price);
+  if(!Number.isFinite(price) || price < 1 || price > 500000) return out(res, 400, { error: '价格须在 1-500000 之间' });
+  let quantity = 1;
+  if(item.type === 'material') quantity = Math.max(1, Math.min(item.quantity, Number(b.quantity) || 1));
+  const expires_at = now() + MARKET_DURATION;
+  const r = stmt('INSERT INTO marketplace(seller_id,seller_name,item_name,item_type,item_quality,item_stats,quantity,price,status,created,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+    u.id, p.username || '玩家', item.name, item.type, item.quality, JSON.stringify(safeJson(item.stats, {})), quantity, price, 'active', now(), expires_at);
+  consumeItem(u.id, item.id, quantity);
+  return out(res, 201, { ok: true, order_id: Number(r.lastInsertRowid), item_name: item.name, item_type: item.type, quantity, price, expires_at });
+}
+async function handleMarketBuy(req, res, u){
+  const b = await body(req);
+  const p = getPlayer(u.id);
+  if(!p) return out(res, 404, { error: '尚未创建角色' });
+  const order = get('SELECT * FROM marketplace WHERE id=? AND status=?', Number(b.order_id) || 0, 'active');
+  if(!order) return out(res, 404, { error: '订单不存在或已失效' });
+  if(order.expires_at <= now()){
+    stmt('UPDATE marketplace SET status=? WHERE id=?', 'expired', order.id);
+    return out(res, 410, { error: '订单已过期' });
+  }
+  if(order.seller_id === u.id) return out(res, 400, { error: '不能购买自己的挂单' });
+  if(p.gold < order.price) return out(res, 400, { error: '金币不足' });
+  const seller = getPlayer(order.seller_id);
+  p.gold -= order.price;
+  stmt('UPDATE player SET gold=? WHERE user_id=?', p.gold, u.id);
+  const fee = Math.floor(order.price * MARKET_FEE);
+  if(seller) stmt('UPDATE player SET gold=gold+? WHERE user_id=?', order.price - fee, seller.user_id);
+  addItem(u.id, order.item_name, order.item_type, order.item_quality, safeJson(order.item_stats, {}), 'backpack', order.quantity);
+  stmt('UPDATE marketplace SET status=? WHERE id=?', 'sold', order.id);
+  return out(res, 201, { ok: true, order_id: order.id, name: order.item_name, quantity: order.quantity, cost: order.price, fee, gold: p.gold });
+}
+async function handleMarketCancel(req, res, u){
+  const b = await body(req);
+  const p = getPlayer(u.id);
+  if(!p) return out(res, 404, { error: '尚未创建角色' });
+  const order = get('SELECT * FROM marketplace WHERE id=? AND seller_id=? AND status=?', Number(b.order_id) || 0, u.id, 'active');
+  if(!order) return out(res, 404, { error: '订单不存在或不可取消' });
+  if(order.expires_at <= now()){
+    stmt('UPDATE marketplace SET status=? WHERE id=?', 'expired', order.id);
+    return out(res, 410, { error: '订单已过期' });
+  }
+  addItem(u.id, order.item_name, order.item_type, order.item_quality, safeJson(order.item_stats, {}), 'backpack', order.quantity);
+  stmt('UPDATE marketplace SET status=? WHERE id=?', 'cancelled', order.id);
+  return out(res, 200, { ok: true, order_id: order.id });
+}
+
     /* ========== 阶段2：副本与战斗接口（第 4 节） ========== */
     if(path === '/api/rpg/dungeon/start' && method === 'POST') return await handleDungeonStart(req, res, u);
     if(path === '/api/rpg/dungeon/event' && method === 'POST') return await handleDungeonEvent(req, res, u);
     if(path === '/api/rpg/dungeon/settle' && method === 'POST') return handleDungeonSettle(req, res, u);
     if(path === '/api/rpg/dungeon/status' && method === 'GET') return handleDungeonStatus(req, res, u);
     if(path === '/api/rpg/dungeon/settings' && method === 'POST') return await handleDungeonSettings(req, res, u);
+
+    /* ========== 阶段3：铁匠铺 / 商店 / 交易行接口（第 7 节） ========== */
+    if(path === '/api/rpg/forge/catalog' && method === 'GET') return out(res, 200, forgeCatalog());
+    if(path === '/api/rpg/forge/material' && method === 'POST') return await handleForgeMaterial(req, res, u);
+    if(path === '/api/rpg/forge/potion' && method === 'POST') return await handleForgePotion(req, res, u);
+    if(path === '/api/rpg/forge/equip' && method === 'POST') return await handleForgeEquip(req, res, u);
+    if(path === '/api/rpg/shop/items' && method === 'GET') return await handleShopItems(req, res, u);
+    if(path === '/api/rpg/shop/buy' && method === 'POST') return await handleShopBuy(req, res, u);
+    if(path === '/api/rpg/market/list' && method === 'GET') return await handleMarketList(req, res, u);
+    if(path === '/api/rpg/market/create' && method === 'POST') return await handleMarketCreate(req, res, u);
+    if(path === '/api/rpg/market/buy' && method === 'POST') return await handleMarketBuy(req, res, u);
+    if(path === '/api/rpg/market/cancel' && method === 'POST') return await handleMarketCancel(req, res, u);
 
     if(path === '/api/logout' && method === 'POST'){
       stmt('DELETE FROM sessions WHERE token=?', hash(cookie(req) || ''));
