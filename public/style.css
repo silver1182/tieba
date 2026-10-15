@@ -363,3 +363,177 @@ textarea.drag-over{border-color:var(--accent,#e07b39)!important;background:rgba(
 textarea.drag-over{border-color:var(--orange)!important;background:rgba(245,158,11,.10)!important;box-shadow:0 0 0 3px #f59e0b22!important}
 textarea.uploading{border-color:var(--mint)!important;opacity:.8}
 @keyframes spin{to{transform:rotate(360deg)}}
+
+/* ================================================================
+ * 阶段4：RPG 前端（角色/背包/副本/铁匠铺/商店 + 底部导航）
+ * ================================================================ */
+.gold-pill{display:flex;align-items:center;gap:6px;background:linear-gradient(135deg,#f59e0b26,#d9770614);border:1px solid #f59e0b45;color:var(--orange);padding:6px 14px;border-radius:999px;font-size:13px;font-weight:700;white-space:nowrap}
+.gold-pill b{color:var(--text)}
+.page-title{margin:4px 0 14px}
+.page-title h2{margin:0;font-size:22px;letter-spacing:.5px}
+.page-title .muted{margin:2px 0 0}
+.panel{background:var(--glass);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,.07);border-radius:var(--radius);padding:16px;margin-bottom:14px}
+.panel-title{margin:0 0 12px;font-size:14px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;border-left:3px solid var(--orange);padding-left:9px}
+.empty-tip{color:var(--muted);text-align:center;padding:34px 14px}
+
+/* ---- 角色页 ---- */
+.rpg-head-top{display:flex;align-items:center;gap:14px}
+.char-ico{width:64px;height:64px;font-size:34px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#f59e0b2e,#d9770612);border:1px solid #f59e0b40;border-radius:16px;flex:none}
+.char-meta{flex:1;min-width:0}
+.char-name{font-size:20px;font-weight:800}
+.exp-row{display:flex;align-items:center;gap:8px;margin-top:6px}
+.exp-bar{flex:1;height:8px;background:var(--panel3);border-radius:999px;overflow:hidden}
+.exp-bar i{display:block;height:100%;background:linear-gradient(90deg,var(--mint),#79e1c2aa);border-radius:999px;transition:.3s}
+.exp-text{font-size:12px;color:var(--muted);white-space:nowrap}
+.gold-big{font-size:18px;font-weight:800;color:var(--orange);white-space:nowrap}
+.hp-row{display:flex;align-items:center;gap:10px;margin-top:14px;font-size:12.5px;color:var(--muted)}
+.hp-bar{flex:1;height:10px;background:var(--panel3);border-radius:999px;overflow:hidden}
+.hp-bar i{display:block;height:100%;background:linear-gradient(90deg,#f87171,#f59e0b);border-radius:999px;transition:.3s}
+.attr-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px}
+.attr-cell{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:10px 12px;text-align:center}
+.attr-cell span{display:block;font-size:12px;color:var(--muted);margin-bottom:3px}
+.attr-cell b{font-size:17px;color:var(--text)}
+.equip-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+.equip-slot{background:var(--panel2);border:1px dashed var(--line);border-radius:14px;padding:12px;text-align:center}
+.slot-ico{font-size:26px}
+.slot-label{color:var(--muted);font-size:12px;margin:3px 0 9px}
+.slot-empty{color:var(--muted);padding:12px 0;font-size:13px}
+.slot-item{border-radius:10px;padding:10px;background:#ffffff0a}
+.slot-name{font-weight:700;font-size:14px}
+.slot-stats{font-size:12px;color:var(--muted);margin:5px 0 9px;word-break:break-word}
+
+/* ---- 品质 ---- */
+.q-badge{display:inline-block;font-size:11px;padding:1px 7px;border-radius:999px;font-weight:700;vertical-align:middle;margin-left:2px}
+.q-normal{color:#cfd6e4;background:#94a3b81f;border:1px solid #94a3b840}
+.q-fine{color:#7dd3fc;background:#38bdf822;border:1px solid #38bdf855}
+.q-superb{color:#d8b4fe;background:#a78bfa22;border:1px solid #a78bfa55}
+.q-rare{color:#fcd34d;background:#f59e0b22;border:1px solid #f59e0b66}
+.item-card.q-fine,.equip-slot .q-fine,.slot-item.q-fine{border-color:#38bdf866}
+.item-card.q-superb,.slot-item.q-superb{border-color:#a78bfa77}
+.item-card.q-rare,.slot-item.q-rare{border-color:#f59e0b88}
+
+/* ---- 通用 tab ---- */
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.tabs button{background:var(--panel2);border:1px solid var(--line);color:var(--muted);padding:8px 16px;border-radius:999px;font-size:13px;transition:.2s}
+.tabs button:hover{color:var(--text);border-color:#f59e0b55}
+.tabs button.active{background:linear-gradient(135deg,#f59e0b2e,#d9770614);color:var(--orange);border-color:#f59e0b66;font-weight:700}
+
+/* ---- 背包页 ---- */
+.item-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:12px}
+.item-card{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:14px;text-align:center;transition:.2s}
+.item-card:hover{transform:translateY(-2px);box-shadow:var(--shadow)}
+.item-ico{font-size:30px;margin-bottom:6px}
+.item-name{font-weight:700;font-size:13.5px;margin-bottom:4px;word-break:break-word}
+.item-stats{font-size:11.5px;color:var(--muted);margin-bottom:10px;word-break:break-word;min-height:30px}
+.primary.sm{padding:6px 14px;font-size:12.5px;border-radius:9px}
+.ghost.sm{padding:5px 12px;font-size:12px;border-radius:9px}
+.stack-list{display:flex;flex-direction:column;gap:8px}
+.stack-row{display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:12px}
+.stack-ico{font-size:20px}
+.stack-name{font-weight:700;flex:1;min-width:0;word-break:break-word}
+.stack-stats{color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:38%}
+.stack-qty{color:var(--orange);font-weight:800;flex:none}
+
+/* ---- 创建角色 ---- */
+.race-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
+.race-card{text-align:center;padding:20px 16px}
+.race-ico{font-size:42px}
+.race-name{font-size:18px;font-weight:800;margin:8px 0 4px}
+.race-tag{display:inline-block;background:#f59e0b1f;color:var(--orange);border:1px solid #f59e0b40;padding:1px 9px;border-radius:999px;font-size:12px;vertical-align:middle}
+.race-desc{color:var(--muted);font-size:12.5px;min-height:38px;margin:0 0 12px}
+
+/* ---- 副本页 ---- */
+.chapter-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:14px}
+.chapter-card{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:16px;text-align:center;opacity:.75}
+.chapter-card.active{border-color:#f59e0b66;opacity:1;background:linear-gradient(135deg,#f59e0b14,#d9770608)}
+.chapter-card.locked{opacity:.45}
+.chapter-ico{font-size:34px;margin-bottom:6px}
+.chapter-name{font-weight:800;font-size:15px;margin-bottom:3px}
+.chapter-card .muted{font-size:12px;margin:0}
+.dungeon-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:6px}
+.event-choices{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+.event-choices .choice{display:block;text-align:left;padding:9px 12px;border:1px solid var(--border,#444);border-radius:8px;background:rgba(255,255,255,.04);color:inherit;cursor:pointer;font-size:14px;line-height:1.45;transition:background .15s}
+.event-choices .choice:hover{background:rgba(255,255,255,.1)}
+.field.inline{display:flex;align-items:center;gap:8px}
+.field.inline span{width:auto}
+.field select,.field input[type="number"]{width:auto;min-width:110px}
+.dungeon-track{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.slot-cell{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:12px 6px;text-align:center;opacity:.55}
+.slot-cell .slot-ico{font-size:26px}
+.slot-name{font-size:11.5px;color:var(--muted);margin-top:4px}
+.slot-cell.current{border-color:var(--orange);opacity:1;box-shadow:0 0 0 3px #f59e0b22;background:linear-gradient(135deg,#f59e0b1c,#d9770608)}
+.slot-cell.done{border-color:#79e1c255;opacity:.85}
+.slot-cell.done .slot-name{color:var(--mint)}
+.settings-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;align-items:end}
+.switch-row{display:flex;align-items:center;gap:10px;font-size:14px;cursor:pointer}
+.switch-row input{width:18px;height:18px;accent-color:var(--orange)}
+.battle-log{margin:8px 0;padding-left:18px;color:#dbe4f0;font-size:13px}
+.battle-log li{margin:2px 0}
+.battle-card{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:10px}
+.battle-head{font-size:13px;font-weight:700;color:var(--muted)}
+.reward-line{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;font-size:13px}
+.r-exp{color:var(--mint);font-weight:700}
+.r-gold{color:var(--orange);font-weight:700}
+.r-item{color:#a5b4fc;font-weight:600}
+.r-loss{color:var(--red);font-weight:700}
+.r-hp{color:#f87171;font-weight:700}
+.r-hp-dmg{color:var(--red);font-weight:700}
+
+/* ---- 铁匠铺 ---- */
+.forge-list{display:flex;flex-direction:column;gap:8px}
+.forge-row{display:flex;align-items:center;gap:10px;padding:11px 14px;border-radius:12px;flex-wrap:wrap}
+.forge-name{font-weight:700;flex:1;min-width:120px}
+.forge-cost{color:var(--orange);font-weight:800;white-space:nowrap}
+.forge-ing{color:var(--muted);font-size:12px;flex:1;min-width:120px}
+
+/* ---- 商店 ---- */
+.shop-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:12px}
+.shop-card{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:16px;text-align:center}
+.shop-ico{font-size:34px;margin-bottom:6px}
+.shop-name{font-weight:800;font-size:15px}
+.shop-type{font-size:12px}
+.shop-stats{font-size:11.5px;color:var(--muted);margin:6px 0 10px;word-break:break-word;min-height:32px}
+.shop-buy-row{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap}
+.shop-buy-row .qty{width:58px;padding:6px 8px;background:var(--panel3);border:1px solid var(--line);border-radius:9px;text-align:center}
+
+/* ---- 个人资料 ---- */
+.profile-head{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:18px;margin-bottom:14px}
+.profile-head h2{margin:0;font-size:20px}
+.profile-head .muted{margin:2px 0}
+.profile-title{display:inline-block;margin-top:6px;background:#a78bfa1f;color:#c4b5fd;border:1px solid #a78bfa50;padding:2px 11px;border-radius:999px;font-size:12px}
+.profile-actions{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+.profile-rpg{padding:16px;margin-bottom:14px}
+.profile-rpg h3{margin:0 0 8px}
+.profile-rpg p{margin:3px 0;color:var(--muted)}
+
+/* ---- 弹窗通用 ---- */
+.modal-mask{position:fixed;inset:0;background:rgba(4,8,18,.6);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;z-index:200;padding:18px}
+.modal{width:min(430px,100%);max-height:88vh;overflow:auto;padding:22px;border-radius:18px}
+.modal-title{margin:0 0 14px;font-size:18px}
+.modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:16px}
+.color-row{display:flex;gap:8px;flex-wrap:wrap}
+.color-dot{width:30px;height:30px;border-radius:50%;border:2px solid transparent;cursor:pointer}
+.color-dot.active{border-color:#fff;box-shadow:0 0 0 3px #f59e0b66}
+
+/* ---- 底部导航（小屏） ---- */
+.bottom-nav{display:none}
+.account-btn{display:flex;align-items:center;gap:10px;width:100%;padding:8px;border-radius:12px;transition:.2s}
+.account-btn:hover{background:#ffffff0d}
+.acct-name{font-weight:700;font-size:14px;text-align:left}
+.acct-sub{color:var(--muted);font-size:11.5px;text-align:left}
+
+@media(max-width:1024px){
+  .chat-panel{position:fixed;right:14px;bottom:12px;left:14px;width:auto;height:56vh;z-index:80;display:flex;flex-direction:column;transform:translateY(130%);opacity:0;pointer-events:none;transition:.28s;border-radius:16px}
+  .chat-panel.open{transform:none;opacity:1;pointer-events:auto}
+  .chat-fab{position:fixed;right:14px;bottom:14px;z-index:79;display:flex;width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,var(--orange),var(--orange2));color:#1c1206;font-size:23px;box-shadow:0 8px 22px rgba(245,158,11,.4)}
+  .chat-close{display:flex}
+}
+@media(max-width:860px){
+  .bottom-nav{display:flex;position:fixed;left:8px;right:8px;bottom:8px;z-index:64;justify-content:space-around;padding:8px 4px;border-radius:18px;box-shadow:var(--shadow)}
+  .bottom-nav button{display:flex;flex-direction:column;align-items:center;gap:2px;flex:1;padding:5px 2px;border-radius:12px;color:var(--muted);font-size:11px;transition:.18s}
+  .bottom-nav button .bn-ico{font-size:20px;line-height:1}
+  .bottom-nav button.active{color:var(--orange);background:linear-gradient(135deg,#f59e0b2e,#d9770618);font-weight:800}
+  .shell{padding-bottom:86px}
+  .chat-panel{bottom:84px;left:8px;right:8px;height:56vh}
+  .chat-fab{bottom:84px;right:10px}
+}

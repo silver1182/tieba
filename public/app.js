@@ -1,888 +1,990 @@
-/* Campfire Arcade 前端逻辑 —— 无内联事件处理器，全部 addEventListener + 事件委托 */
-const $ = s => document.querySelector(s);
-const $$ = s => [...document.querySelectorAll(s)];
-const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+/* ================================================================
+ * Campfire Arcade · 篝火社区 前端应用
+ * 阶段4：前端重构 —— 底部导航 5 页（角色/背包/副本/铁匠铺/商店）
+ * 保留：登录注册（邀请码门槛）、个人资料、实时聊天
+ * 移除：发帖/回复/点赞/收藏/活动/通知/游戏页
+ * ================================================================ */
 
-let me = null;
-let ws = null;
-let onlineCount = 0;
-let currentFilter = '全部';
-let currentSort = 'latest';
-let currentSearch = '';
-let topicPage = 1;
-let topicTotal = 0;
-const TOPIC_PAGE_SIZE = 20;
-const REPLY_PAGE_SIZE = 20;
+'use strict';
 
-const CAT_EMOJI = {
-  '游戏讨论':'🎮','心得分享':'📖','求助提问':'❓','独立游戏':'🎲',
-  '玩家创作':'🎨','资源分享':'📦','日常闲聊':'☕','默认':'✦',
-  '趣味闲聊':'🎈'
-};
-const CATEGORIES = ['游戏讨论','心得分享','求助提问','独立游戏','趣味闲聊','玩家创作','资源分享'];
-const FILTERS = ['全部','游戏讨论','心得分享','求助提问','独立游戏','趣味闲聊'];
-const EMOJIS = ['😀','😄','😂','🤣','😊','😍','🤔','😎','🥳','😭','😅','🙃','👍','👏','🔥','❤️','💯','🎉','🍻','🌙','⛺','🎮','✨'];
+/* ---------- 工具函数 ---------- */
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-/* ---------- 通用工具 ---------- */
-function toast(msg, isErr = false){
-  const t = $('#toast');
-  t.textContent = msg;
-  t.className = isErr ? 'err' : '';
-  t.style.display = 'block';
-  clearTimeout(toast._t);
-  toast._t = setTimeout(() => t.style.display = 'none', 2600);
+let toastTimer = null;
+function toast(msg, isErr = false) {
+  const el = $('#toast');
+  el.textContent = msg;
+  el.className = isErr ? 'show err' : 'show';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.className = ''; }, 2600);
 }
-async function api(path, opt = {}){
-  const r = await fetch(path, {headers:{'Content-Type':'application/json', ...(opt.headers||{})}, ...opt});
-  let d;
-  try { d = await r.json(); } catch { d = {}; }
-  if(!r.ok) throw new Error(d.error || '请求失败');
-  return d;
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined
+  });
+  let data = null;
+  try { data = await res.json(); } catch { data = {}; }
+  if (!res.ok) throw new Error(data.error || ('请求失败（' + res.status + '）'));
+  return data;
 }
-function avatarDataUri(name, size = 40, color = ''){
-  const colors = ['#f59e0b','#79e1c2','#f472b6','#a78bfa','#60a5fa','#fb923c','#34d399','#f87171','#38bdf8','#c084fc'];
-  let h = 0;
-  const s = String(name||'?');
-  for(const c of s) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  const c = color || colors[h % colors.length];
-  const ch = (s[0] || '?').toUpperCase();
-  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${size}' height='${size}'><rect width='${size}' height='${size}' rx='${Math.round(size*0.25)}' fill='${c}'/><text x='${size/2}' y='${size*0.68}' font-size='${Math.round(size*0.46)}' text-anchor='middle' fill='#fff' font-family='sans-serif' font-weight='bold'>${ch}</text></svg>`;
-  return 'data:image/svg+xml,' + encodeURIComponent(svg);
-}
-function catEmoji(c){ return CAT_EMOJI[c] || CAT_EMOJI['默认']; }
-function fmtTime(ts){
+
+function fmtTime(ts) {
   const d = new Date(ts);
-  const now = new Date();
-  const diff = now - d;
-  if(diff < 60*1000) return '刚刚';
-  if(diff < 3600*1000) return Math.floor(diff/60000) + ' 分钟前';
-  if(diff < 86400*1000) return Math.floor(diff/3600000) + ' 小时前';
-  if(diff < 7*86400*1000) return Math.floor(diff/86400000) + ' 天前';
-  return d.toLocaleDateString();
+  const p = n => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}`;
 }
-function avatarImg(name, cls, color, size){
-  return `<img class="avatar ${cls||''}" src="${avatarDataUri(name, size, color)}" alt="${esc(name)}">`;
+function fmtDate(ts) {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/* ---------- Markdown 渲染（轻量、XSS 安全） ---------- */
-function escapeHtml(s){
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const AVATAR_COLORS = ['#f59e0b', '#79e1c2', '#f472b6', '#a78bfa', '#60a5fa', '#fb923c', '#34d399', '#f87171', '#38bdf8', '#c084fc'];
+function avatarDataUri(name, color) {
+  const s = (name || '?').slice(0, 1).toUpperCase();
+  const c = color && AVATAR_COLORS.includes(color) ? color : '#f59e0b';
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" rx="40" fill="${c}"/><text x="40" y="52" font-family="Arial,sans-serif" font-size="36" font-weight="700" fill="#1a120b" text-anchor="middle">${s}</text></svg>`;
+  return 'data:image/svg+xml;base64,' + btoa(svg);
 }
-function renderInline(t){
-  return escapeHtml(t)
-    .replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/!\[([^\]]*)\]\((\/uploads\/[a-f0-9]{16}\.(?:png|jpe?g|gif|webp))\)/gi, (m, alt, url) => `<img src="${url}" alt="${alt}" loading="lazy">`)
-    .replace(/\[([^\]]+)\]\((\/uploads\/[a-f0-9]{16}\.(?:png|jpe?g|gif|webp))\)/gi, (m, text, url) => `<a href="${url}" target="_blank">${text}</a>`)
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
-    .replace(/(^|\s)(https?:\/\/[^\s<]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>')
-    .replace(/\n/g, '<br>');
-}
-function renderMarkdown(src){
-  if(!src) return '';
-  const lines = String(src).replace(/\r\n/g, '\n').split('\n');
-  let html = '', inCode = false, inQuote = false, inList = false;
-  const closeQuote = () => { if(inQuote){ html += '</blockquote>'; inQuote = false; } };
-  const closeList = () => { if(inList){ html += '</ul>'; inList = false; } };
-  for(const raw of lines){
-    if(/^```/.test(raw)){
-      closeQuote(); closeList();
-      html += inCode ? '</code></pre>' : '<pre><code>';
-      inCode = !inCode; continue;
-    }
-    if(inCode){ html += escapeHtml(raw) + '\n'; continue; }
-    if(/^\s*>\s?/.test(raw)){
-      closeList();
-      if(!inQuote){ closeQuote(); html += '<blockquote>'; inQuote = true; }
-      html += renderInline(raw.replace(/^\s*>\s?/, '')) + '<br>'; continue;
-    }
-    closeQuote();
-    const h = /^(#{1,6})\s+(.*)$/.exec(raw);
-    if(h){ closeList(); html += `<h${h[1].length}>${renderInline(h[2])}</h${h[1].length}>`; continue; }
-    const ul = /^\s*[-*+]\s+(.*)$/.exec(raw);
-    const ol = /^\s*\d+[.、]\s+(.*)$/.exec(raw);
-    if(ul || ol){
-      if(!inList){ html += '<ul>'; inList = true; }
-      html += `<li>${renderInline((ul || ol)[1])}</li>`;
-      continue;
-    }
-    closeList();
-    if(!raw.trim()){ html += '<br>'; continue; }
-    html += `<p>${renderInline(raw)}</p>`;
-  }
-  closeQuote(); closeList();
-  if(inCode) html += '</code></pre>';
-  return html;
+function avatarImg(user) {
+  if (!user) return '';
+  if (user.avatar) return `<img class="avatar" src="${esc(user.avatar)}" alt="">`;
+  const src = avatarDataUri(user.display_name || user.username, user.avatar_color);
+  return `<img class="avatar" src="${src}" alt="">`;
 }
 
-/* ---------- 图片上传（base64 提交，前端限制尺寸） ---------- */
-async function uploadImage(file){
-  if(!file) throw new Error('未选择文件');
-  if(!/^image\/(png|jpe?g|gif|webp)$/i.test(file.type)) throw new Error('仅支持 png/jpg/gif/webp 图片');
-  if(file.size > 5 * 1024 * 1024) throw new Error('图片大小不能超过 5MB');
-  let blob = file;
-  if(file.type !== 'image/gif'){
-    const bmp = await createImageBitmap(file);
-    const max = 1600;
-    const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
-    const w = Math.max(1, Math.round(bmp.width * scale));
-    const h = Math.max(1, Math.round(bmp.height * scale));
-    const cv = document.createElement('canvas');
-    cv.width = w; cv.height = h;
-    cv.getContext('2d').drawImage(bmp, 0, 0, w, h);
-    blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.85));
-    bmp.close();
-  }
-  const dataUrl = await new Promise((resolve, reject) => {
-    const fr = new FileReader();
-    fr.onload = () => resolve(String(fr.result));
-    fr.onerror = reject;
-    fr.readAsDataURL(blob);
-  });
-  const r = await fetch('/api/upload', { method: 'POST', body: JSON.stringify({ data: dataUrl }), headers: { 'Content-Type': 'application/json' } });
-  const j = await r.json().catch(() => ({}));
-  if(!r.ok) throw new Error(j.error || '上传失败');
-  return j.url;
+function openModal(html) {
+  const root = $('#modalRoot');
+  root.innerHTML = `<div class="modal-mask" data-action="close-modal"><div class="modal glass">${html}</div></div>`;
+  root.classList.remove('hidden');
+  $('#modalRoot .modal input:first-of-type')?.focus();
 }
-function bindImageBtn(btn, ta){
-  btn.addEventListener('click', () => {
-    const input = document.createElement('input');
-    input.type = 'file'; input.accept = 'image/png,image/jpeg,image/gif,image/webp';
-    input.onchange = async () => {
-      const f = input.files && input.files[0]; if(!f) return;
-      setBtnLoading(btn, true);
-      try {
-        const url = await uploadImage(f);
-        insertImageMarkdown(ta, `![图片](${url})`);
-        toast('图片已上传并插入');
-      } catch(e){
-        toast(e.message || '上传失败', true);
-      } finally {
-        setBtnLoading(btn, false);
-      }
-    };
-    input.click();
-  });
+function closeModal() {
+  const root = $('#modalRoot');
+  root.classList.add('hidden');
+  root.innerHTML = '';
 }
-function bindDropImage(area, ta){
-  area.addEventListener('dragover', e => { e.preventDefault(); area.classList.add('drag-over'); });
-  area.addEventListener('dragleave', () => area.classList.remove('drag-over'));
-  area.addEventListener('drop', async e => {
-    e.preventDefault(); area.classList.remove('drag-over');
-    const f = e.dataTransfer.files && e.dataTransfer.files[0];
-    if(f && /^image\//.test(f.type)){
-      area.classList.add('uploading');
-      try {
-        const url = await uploadImage(f);
-        insertImageMarkdown(ta, `![图片](${url})`);
-        toast('图片已上传并插入');
-      } catch(err){
-        toast(err.message || '上传失败', true);
-      } finally {
-        area.classList.remove('uploading');
-      }
-    }
-  });
-}
+$('#modalRoot')?.addEventListener('click', e => {
+  if (e.target.closest('[data-action="close-modal"]') && !e.target.closest('.modal')) closeModal();
+});
 
-/* ---------- 启动 ---------- */
-async function boot(){
-  try {
-    const d = await api('/api/me');
-    me = d.user;
-    if(!me){ showAuth('login'); return; }
-    enterShell();
-  } catch(e){ toast(e.message, true); }
-}
+/* ---------- RPG 展示辅助 ---------- */
+const QUALITY_CN = { normal: '普通', fine: '优良', superb: '精良', rare: '稀有' };
+const QUALITY_CLASS = { normal: 'q-normal', fine: 'q-fine', superb: 'q-superb', rare: 'q-rare' };
+const TYPE_CN = { weapon: '武器', armor: '护甲', accessory: '饰品', consumable: '消耗品', material: '材料', quest: '任务物品' };
+const TYPE_ICO = { weapon: '⚔️', armor: '🛡️', accessory: '📿', consumable: '🧪', material: '🪵', quest: '🗺️' };
+const RACE_INFO = {
+  '人族': { ico: '🧑', tag: '坚韧', desc: '生命上限 +10 · 战败金币损失 5%' },
+  '精灵': { ico: '🧝', tag: '精准', desc: '暴击率 +10% · 防御 -1 · 掉落加成 5%' },
+  '矮人': { ico: '🧔', tag: '锻体', desc: '防御 +3 · Boss 伤害减免 10% · 暴击率 -5%' },
+  '魔族': { ico: '😈', tag: '狂热', desc: '攻击 +4 · 低血时攻击 +6 · 战败金币损失 15%' }
+};
+const STAT_CN = {
+  max_hp: '生命上限', attack: '攻击', defense: '防御', crit_rate: '暴击率',
+  crit_dmg: '暴击伤害', gold_bonus: '金币加成', heal_pct: '治疗',
+  beast_hp_low_dmg: '野兽低血增伤', beast_dmg_reduce: '野兽减伤', undead_dmg: '对黑雾增伤',
+  big_hit_reduce: '重击减免', high_hp_reduce: '高血减伤', death_save: '免死', heal_pct_penalty: '治疗惩罚'
+};
+const PCT_KEYS = ['crit_rate', 'crit_dmg', 'gold_bonus', 'heal_pct', 'beast_dmg_reduce', 'undead_dmg', 'high_hp_reduce', 'heal_pct_penalty'];
 
-/* ---------- 登录 / 注册 ---------- */
-function showAuth(mode){
-  $('#authView').classList.remove('hidden');
-  $('#shell').classList.add('hidden');
-  renderAuth(mode);
+function statsText(stats) {
+  if (!stats) return '';
+  return Object.entries(stats).map(([k, v]) => {
+    const label = STAT_CN[k] || k;
+    if (PCT_KEYS.includes(k) && k !== 'death_save') return `${label} +${v}%`;
+    if (k === 'death_save') return `${label} +${v}`;
+    return `${label} +${v}`;
+  }).join(' · ');
 }
-function renderAuth(mode){
-  const card = $('#authCard');
-  if(mode === 'login'){
-    card.innerHTML = `
-      <div class="auth-brand"><span class="mark">✦</span> Campfire Arcade</div>
-      <h2 class="auth-hello">欢迎回来<span class="hl">。</span></h2>
-      <p class="auth-desc">这是一个仅限受邀好友加入的私密论坛，在这里分享生活、交流想法，记录我们的小小世界。</p>
-      <div class="field"><label>账号</label><div class="in-wrap"><span class="in-ico">👤</span><input id="authU" autocomplete="username" placeholder="输入账号"></div></div>
-      <div class="field"><label>密码</label><div class="in-wrap"><span class="in-ico">🔒</span><input id="authP" type="password" autocomplete="current-password" placeholder="输入密码"><button class="pw-toggle" id="pwToggle" type="button" data-pw="authP">👁</button></div></div>
-      <div class="auth-actions">
-        <button class="primary" id="doLogin">登录</button>
-        <button class="ghost" id="toRegister">使用邀请码注册</button>
-      </div>
-      <p class="auth-tip">邀请码由管理员创建，为临时有效，仅限受邀的朋友使用，请妥善保管并及时注册。</p>`;
-    $('#doLogin').addEventListener('click', doLogin);
-    $('#toRegister').addEventListener('click', () => renderAuth('register'));
-  } else {
-    card.innerHTML = `
-      <div class="auth-brand"><span class="mark">✦</span> Campfire Arcade</div>
-      <h2 class="auth-hello">加入篝火<span class="hl">。</span></h2>
-      <p class="auth-desc">带上你的邀请码，成为这个小社区的一员——发帖、聊天，分享你的游戏与故事。</p>
-      <div class="field"><label>账号</label><div class="in-wrap"><span class="in-ico">👤</span><input id="authU" autocomplete="username" placeholder="3–24 位字母、数字或下划线"></div></div>
-      <div class="field"><label>密码</label><div class="in-wrap"><span class="in-ico">🔒</span><input id="authP" type="password" autocomplete="new-password" placeholder="至少 10 位"><button class="pw-toggle" id="pwToggle" type="button" data-pw="authP">👁</button></div></div>
-      <div class="field"><label>限时邀请码</label><div class="in-wrap"><span class="in-ico">🗝️</span><input id="authI" placeholder="请输入邀请码"></div></div>
-      <div class="auth-actions">
-        <button class="primary" id="doReg">注册并登录</button>
-        <button class="ghost" id="toLogin">返回登录</button>
-      </div>
-      <p class="auth-tip">邀请码由管理员创建，为临时有效，仅限受邀的朋友使用，请妥善保管并及时注册。</p>`;
-    $('#doReg').addEventListener('click', doRegister);
-    $('#toLogin').addEventListener('click', () => renderAuth('login'));
-  }
-  bindPwToggle();
-}
-function bindPwToggle(){
-  const btn = $('#pwToggle');
-  if(btn) btn.addEventListener('click', () => {
-    const inp = $('#' + btn.dataset.pw);
-    inp.type = inp.type === 'password' ? 'text' : 'password';
-    btn.textContent = inp.type === 'password' ? '👁' : '🙈';
-  });
-}
-async function doLogin(){
-  try {
-    await api('/api/login', {method:'POST', body:JSON.stringify({username:$('#authU').value, password:$('#authP').value})});
-    location.reload();
-  } catch(e){ toast(e.message, true); }
-}
-async function doRegister(){
-  try {
-    await api('/api/register', {method:'POST', body:JSON.stringify({username:$('#authU').value, password:$('#authP').value, invite:$('#authI').value})});
-    location.reload();
-  } catch(e){ toast(e.message, true); }
-}
+function qualityBadge(q) { return `<span class="q-badge ${QUALITY_CLASS[q] || 'q-normal'}">${QUALITY_CN[q] || q}</span>`; }
 
-/* ---------- 进入主界面 ---------- */
-function enterShell(){
-  $('#authView').classList.add('hidden');
-  $('#shell').classList.remove('hidden');
-  renderSideAccount();
-  bindResponsiveUI();
-  bindNav();
-  bindChat();
-  connectChat();
-  refreshNotifBadge();
-  viewHome();
-}
-function renderSideAccount(){
-  const display = me.display_name || me.username;
-  const roleText = me.role==='admin' ? '管理员' : '成员';
-  const sub = me.title ? `${roleText} · ${esc(me.title)}` : roleText;
-  $('#sideAccount').innerHTML = `
-    <div class="who clickable" id="sideAccountBtn" title="查看个人资料">
-      ${avatarImg(me.username, '', me.avatar_color)}
-      <div><b>${esc(display)}</b><span>${sub}</span></div>
-    </div>`;
-  $('#sideAccountBtn').addEventListener('click', () => {
-    const mask = $('#sideMask');
-    if(mask && mask.classList.contains('open')){
-      document.querySelector('.sidebar').classList.remove('open');
-      mask.classList.remove('open');
-    }
-    setNav('profile');
-    viewProfile();
-  });
-  $('#logoutBtn').addEventListener('click', async () => {
-    if (ws) { try { ws.close(); } catch {} }
-    try { await api('/api/logout', {method:'POST'}); } catch {}
-    location.reload();
-  });
-}
-function setNav(view){
-  $$('#sideNav button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
-}
-function bindNav(){
-  $$('#sideNav button').forEach(b => b.addEventListener('click', () => {
-    const v = b.dataset.view;
-    setNav(v);
-    const mask = $('#sideMask');
-    if(mask && mask.classList.contains('open')){
-      document.querySelector('.sidebar').classList.remove('open');
-      mask.classList.remove('open');
-    }
-    if(v==='home') viewHome();
-    else if(v==='topics') viewTopics();
-    else if(v==='games') viewGames();
-    else if(v==='creations') viewCreations();
-    else if(v==='events') viewEvents();
-    else if(v==='resources') viewResources();
-    else if(v==='favorites') viewFavorites();
-    else if(v==='notifications') viewNotifications();
-    else if(v==='profile') viewProfile();
-  }));
-  $('#newTopicBtn').addEventListener('click', openNewTopic);
-  $('#searchInput').addEventListener('keydown', e => { if(e.key==='Enter'){ currentSearch = e.target.value.trim(); viewTopics(); } });
-}
+/* ---------- 全局状态 ---------- */
+let ME = null;
+let rpg = { char: null, gold: 0, backpack: null, dungeon: null, forge: null, shop: null };
+let currentBackpackTab = 'equipment';
+let currentForgeTab = 'material';
+let dungeonSession = null; // { chapter, events, idx } 前端副本会话缓存
+let chatOpen = window.matchMedia('(min-width: 1025px)').matches;
 
-/* ---------- 帖子列表 ---------- */
-function postCard(t){
-  const admin = me && me.role === 'admin';
-  return `<article class="post-card${t.closed?' closed':''}" data-action="open-topic" data-id="${t.id}">
-    <div class="post-thumb">${catEmoji(t.category)}</div>
-    <div class="post-body">
-      <h3 class="post-title">${t.pinned?'📌 ':''}${esc(t.title)}</h3>
-      <p class="post-excerpt">${esc(cardText(t.body))}</p>
-      <div class="post-foot">
-        <span class="pill">${esc(t.category)}</span>
-        <span class="poster">${avatarImg(t.username, '', t.avatar_color)} ${esc(t.display_name || t.username)}${t.title ? ` <span class="title-tag">${esc(t.title)}</span>` : ''}</span>
-        <span class="meta">${fmtTime(t.created)}</span>
-        <span class="stats">
-          <span class="stat"><span class="heart">❤</span><b>${t.likes||0}</b></span>
-          <span class="stat"><b>${t.replies||0}</b></span>
-        </span>
-      </div>
-      ${admin ? `<div class="admin-ops">
-        <button class="mini-btn" data-action="admin-pin" data-id="${t.id}" data-pinned="${t.pinned?1:0}" data-closed="${t.closed?1:0}" title="置顶 / 取消置顶">${t.pinned?'📌 取消置顶':'📌 置顶'}</button>
-        <button class="mini-btn" data-action="admin-close" data-id="${t.id}" data-pinned="${t.pinned?1:0}" data-closed="${t.closed?1:0}" title="关闭 / 开放回复">${t.closed?'🔓 开放回复':'🔒 关闭回复'}</button>
-        <button class="mini-btn danger" data-action="admin-delete" data-id="${t.id}" title="删除帖子">🗑 删除</button>
-      </div>` : ''}
-    </div>
-  </article>`;
+/* ---------- 导航 ---------- */
+function setNav(view) {
+  $$('[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === view));
 }
-function filterBar(){
-  return `<div class="filter-bar">
-    <div class="filter-tags">
-      ${FILTERS.map(f => `<button class="tag-btn ${f===currentFilter?'active':''}" data-action="filter" data-filter="${f}">${f}</button>`).join('')}
-    </div>
-    <select class="sort-select" id="sortSelect">
-      <option value="latest" ${currentSort==='latest'?'selected':''}>最新发布</option>
-      <option value="replies" ${currentSort==='replies'?'selected':''}>最新回复</option>
-      <option value="likes" ${currentSort==='likes'?'selected':''}>最热点赞</option>
-    </select>
-  </div>`;
+function switchView(view) {
+  setNav(view);
+  if (view === 'character') viewCharacter();
+  else if (view === 'backpack') viewBackpack();
+  else if (view === 'dungeon') viewDungeon();
+  else if (view === 'forge') viewForge();
+  else if (view === 'shop') viewShop();
 }
-function cardText(s){
-  return String(s||'').replace(/```[\s\S]*?```/g, ' ').replace(/!\[[^\]]*\]\([^)]*\)/g, '[图片]').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/[#>*`-]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
-}
-async function loadTopics(params = ''){
-  let qs = `sort=${currentSort}`;
-  if(currentFilter !== '全部') qs += `&category=${encodeURIComponent(currentFilter)}`;
-  if(currentSearch) qs += `&q=${encodeURIComponent(currentSearch)}`;
-  if(params) qs += params;
-  return api('/api/topics?' + qs);
-}
-async function viewTopics(){
-  topicPage = 1;
-  const data = await loadTopics(`&page=${topicPage}&pageSize=${TOPIC_PAGE_SIZE}`);
-  topicTotal = data.total || data.topics.length;
-  $('#view').innerHTML = `
-    <div class="filter-bar">${filterBar()}</div>
-    ${currentSearch ? `<p class="meta">搜索“${esc(currentSearch)}”的结果（共 ${topicTotal} 条）</p>` : ''}
-    <div class="post-list" id="postList">${data.topics.map(postCard).join('') || '<p class="empty-tip">还没有帖子，来发第一个吧。</p>'}</div>
-    <div id="topicPages"></div>`;
-  $('#sortSelect').addEventListener('change', e => { currentSort = e.target.value; viewTopics(); });
-  renderTopicPages();
-}
-function renderTopicPages(){
-  const totalPages = Math.max(Math.ceil(topicTotal / TOPIC_PAGE_SIZE), 1);
-  const el = $('#topicPages');
-  if(!el) return;
-  if(totalPages <= 1){ el.innerHTML = ''; return; }
-  const nums = [];
-  for(let p = 1; p <= totalPages; p++){
-    if(totalPages > 9 && p > 3 && p < totalPages - 2) continue;
-    if(p === 4 && totalPages > 9) nums.push('<span class="page-ellipsis">…</span>');
-    nums.push(`<button class="page-btn ${p===topicPage?'active':''}" data-action="topic-page" data-page="${p}">${p}</button>`);
-    if(p === totalPages - 3 && totalPages > 9) nums.push('<span class="page-ellipsis">…</span>');
-  }
-  el.innerHTML = `<div class="pager">${nums.join('')}</div>`;
-}
-async function viewHome(){
-  setNav('home');
-  const data = await loadTopics('&limit=10');
-  $('#view').innerHTML = `
-    <div class="filter-bar">
-      <div class="filter-tags">${FILTERS.map(f => `<button class="tag-btn ${f===currentFilter?'active':''}" data-action="filter" data-filter="${f}">${f}</button>`).join('')}</div>
-    </div>
-    <div class="post-list">${data.topics.map(postCard).join('') || '<p class="empty-tip">还没有帖子，来发第一个吧。</p>'}</div>`;
-}
-async function viewCreations(){
-  currentFilter = '玩家创作';
-  setNav('creations');
-  const data = await loadTopics();
-  $('#view').innerHTML = `<h2 class="view-title">🎨 玩家创作</h2>
-    <div class="post-list">${data.topics.map(postCard).join('') || '<p class="empty-tip">还没有玩家创作，快去分享吧。</p>'}</div>`;
-}
-async function viewResources(){
-  currentFilter = '资源分享';
-  setNav('resources');
-  const data = await loadTopics();
-  $('#view').innerHTML = `<h2 class="view-title">📦 资源分享</h2>
-    <div class="post-list">${data.topics.map(postCard).join('') || '<p class="empty-tip">还没有资源分享。</p>'}</div>`;
-}
-
-/* ---------- 话题详情 ---------- */
-async function openTopic(id, page = 1){
-  const t = await api(`/api/topics/${id}?page=${page}&pageSize=${REPLY_PAGE_SIZE}`);
-  const totalPages = Math.max(Math.ceil(t.replyTotal / REPLY_PAGE_SIZE), 1);
-  const pagesHtml = totalPages > 1
-    ? `<div class="pager">${Array.from({length: totalPages}, (_, i) => `<button class="page-btn ${i+1===t.replyPage?'active':''}" data-action="reply-page" data-id="${t.id}" data-page="${i+1}">${i+1}</button>`).join('')}</div>`
-    : '';
-  $('#view').innerHTML = `
-    <div class="panel topic-detail">
-      <div class="row"><button class="ghost" data-action="go-topics">← 返回</button></div>
-      <h1>${catEmoji(t.category)} ${esc(t.title)}</h1>
-      <div class="meta">${avatarImg(t.username, '', t.avatar_color)} ${esc(t.display_name || t.username)}${t.title ? ` <span class="title-tag">${esc(t.title)}</span>` : ''} · ${new Date(t.created).toLocaleString()} · <span class="pill">${esc(t.category)}</span></div>
-      <div class="markdown-body">${renderMarkdown(t.body)}</div>
-      <div class="actions-bar">
-        <button class="ghost like-btn ${t.liked?'liked':''}" data-action="like" data-id="${t.id}">❤ ${t.likes}</button>
-        <button class="ghost fav-btn ${t.faved?'faved':''}" data-action="fav" data-id="${t.id}">⭐ ${t.faved?'已收藏':'收藏'}</button>
-      </div>
-      ${me && me.role === 'admin' ? `<div class="admin-bar">
-        <span class="pill ${t.pinned?'':'muted'}">${t.pinned?'📌 已置顶':'未置顶'}</span>
-        <span class="pill ${t.closed?'':'muted'}">${t.closed?'🔒 已关闭回复':'开放回复'}</span>
-        <button class="mini-btn" data-action="admin-pin" data-id="${t.id}" data-pinned="${t.pinned?1:0}" data-closed="${t.closed?1:0}">${t.pinned?'取消置顶':'置顶'}</button>
-        <button class="mini-btn" data-action="admin-close" data-id="${t.id}" data-pinned="${t.pinned?1:0}" data-closed="${t.closed?1:0}">${t.closed?'开放回复':'关闭回复'}</button>
-        <button class="mini-btn danger" data-action="admin-delete" data-id="${t.id}">删除帖子</button>
-      </div>` : ''}
-      <hr class="divider">
-      <h3>💬 回复（${t.replyTotal}）</h3>
-      <div id="replyList">${t.replies.map(r => `
-        <div class="reply-item">
-          <div class="rhead">${avatarImg(r.username, '', r.avatar_color)} <b>${esc(r.display_name || r.username)}</b>${r.title ? ` <span class="title-tag">${esc(r.title)}</span>` : ''} <span class="meta">${new Date(r.created).toLocaleString()}</span></div>
-          <div class="markdown-body">${renderMarkdown(r.body)}</div>
-        </div>`).join('') || '<p class="meta">还没有回复。</p>'}</div>
-      ${pagesHtml}
-      <div class="field"><label>写下回复…</label><textarea id="replyBody" rows="3"></textarea></div>
-      <div class="field row"><button type="button" class="mini-btn" id="replyImgBtn">🖼️ 图片</button><span class="meta">支持 Markdown 与拖拽图片</span></div>
-      <div class="form-actions"><button class="primary" id="sendReply">发送回复</button></div>
-    </div>`;
-  bindImageBtn($('#replyImgBtn'), $('#replyBody'));
-  bindDropImage($('#replyBody'), $('#replyBody'));
-  $('#sendReply').addEventListener('click', async () => {
-    try {
-      await api('/api/topics/' + id + '/replies', {method:'POST', body:JSON.stringify({body:$('#replyBody').value})});
-      const last = Math.max(Math.ceil(t.replyTotal / REPLY_PAGE_SIZE), 1);
-      openTopic(id, last);
-    } catch(e){ toast(e.message, true); }
-  });
-}
-
-/* ---------- 发起话题 ---------- */
-function openNewTopic(){
-  openModal(`
-    <h2>✎ 发起话题</h2>
-    <p class="meta">分享你的游戏、故事或问题。</p>
-    <div class="field"><label>标题</label><input id="ntTitle" maxlength="100" placeholder="一句话说清楚"></div>
-    <div class="field"><label>分类</label><select id="ntCat"><option>游戏讨论</option><option>心得分享</option><option>求助提问</option><option>独立游戏</option><option>趣味闲聊</option><option>玩家创作</option><option>资源分享</option></select></div>
-    <div class="field"><label>内容</label><textarea id="ntBody" rows="7" placeholder="写点什么…（支持 Markdown）"></textarea></div>
-    <div class="field row"><button type="button" class="mini-btn" id="ntImgBtn">🖼️ 图片</button><span class="meta">支持 Markdown 与拖拽图片</span></div>
-    <div class="form-actions"><button class="primary" id="ntSubmit">发布</button><button class="ghost" data-action="close-modal">取消</button></div>`, 'newTopic');
-  bindImageBtn($('#ntImgBtn'), $('#ntBody'));
-  bindDropImage($('#ntBody'), $('#ntBody'));
-  $('#ntSubmit').addEventListener('click', async () => {
-    try {
-      const r = await api('/api/topics', {method:'POST', body:JSON.stringify({title:$('#ntTitle').value, category:$('#ntCat').value, body:$('#ntBody').value})});
-      closeModal();
-      toast('话题已发布');
-      openTopic(r.id);
-    } catch(e){ toast(e.message, true); }
-  });
-}
-
-/* ---------- 游戏 / 活动 / 收藏 / 通知 / 个人资料 ---------- */
-async function viewGames(){
-  setNav('games');
-  const gs = await api('/api/games');
-  $('#view').innerHTML = `<h2 class="view-title">🎮 发现游戏</h2>
-    <div class="cards-grid">${gs.map(g => `
-      <article class="game-card"><div class="game-ico">🎮</div><h3>${esc(g.title)}</h3><p>${esc(g.description)}</p><a class="primary" href="${esc(g.url)}" target="_blank" rel="noopener">开始游戏</a></article>`).join('') || '<p class="empty-tip">管理员还没有添加游戏。</p>'}</div>`;
-}
-async function viewEvents(){
-  setNav('events');
-  const evs = await api('/api/events');
-  $('#view').innerHTML = `<div class="row" class="row spread">
-      <h2 class="no-margin">📅 活动日历</h2>
-      <button class="primary" id="newEventBtn">＋ 发起活动</button></div>
-    <div class="event-list">${evs.map(ev => `
-      <article class="event-card">
-        <div class="event-date"><span class="day">${new Date(ev.start_time).getDate()}</span>${new Date(ev.start_time).toLocaleDateString('zh-CN',{month:'long'})}</div>
-        <h3>${esc(ev.title)}</h3>
-        <p>${esc(ev.description||'')}</p>
-        <div class="meta">⏰ ${new Date(ev.start_time).toLocaleString()} · 主办 ${esc(ev.creator_name)}</div>
-        <div class="row"><button class="mini-btn ${ev.joined?'':'hidden'}" data-action="event-join" data-id="${ev.id}">✔ 已参加</button>
-        <button class="mini-btn ${ev.joined?'hidden':''}" data-action="event-join" data-id="${ev.id}">我要参加</button>
-        <span class="meta">${ev.participants} 人参加</span></div>
-      </article>`).join('') || '<p class="empty-tip">还没有活动。</p>'}</div>`;
-  $('#newEventBtn').addEventListener('click', openNewEvent);
-}
-function openNewEvent(){
-  openModal(`
-    <h2>＋ 发起活动</h2>
-    <div class="field"><label>活动名称</label><input id="evTitle" placeholder="例如：周末游戏之夜"></div>
-    <div class="field"><label>开始时间</label><input id="evTime" type="datetime-local"></div>
-    <div class="field"><label>活动介绍</label><textarea id="evDesc" rows="4" placeholder="说明活动内容…"></textarea></div>
-    <div class="form-actions"><button class="primary" id="evSubmit">发布活动</button><button class="ghost" data-action="close-modal">取消</button></div>`, 'newEvent');
-  $('#evSubmit').addEventListener('click', async () => {
-    try {
-      const t = $('#evTime').value;
-      await api('/api/events', {method:'POST', body:JSON.stringify({title:$('#evTitle').value, start_time:t ? new Date(t).getTime() : Date.now()+86400000, description:$('#evDesc').value})});
-      closeModal();
-      toast('活动已发布');
-      viewEvents();
-    } catch(e){ toast(e.message, true); }
-  });
-}
-async function viewFavorites(){
-  setNav('favorites');
-  const data = await api('/api/favorites');
-  $('#view').innerHTML = `<h2 class="view-title">⭐ 我的收藏</h2>
-    <div class="post-list">${data.topics.map(postCard).join('') || '<p class="empty-tip">还没有收藏任何帖子。</p>'}</div>`;
-}
-async function viewNotifications(){
-  setNav('notifications');
-  const ns = await api('/api/notifications');
-  $('#view').innerHTML = `<div class="row" class="row spread">
-      <h2 class="no-margin">🔔 消息通知</h2>
-      ${ns.some(n=>!n.read) ? '<button class="ghost" id="readAllBtn">全部标为已读</button>' : ''}</div>
-    ${ns.map(n => `
-      <div class="notif-item ${n.read?'':'unread'}">
-        <span class="n-ico">${n.type==='reply'?'💬':'📅'}</span>
-        <div><p>${esc(n.body)}</p><span class="meta">${fmtTime(n.created)}</span></div>
-      </div>`).join('') || '<p class="empty-tip">暂无通知。</p>'}`;
-  const b = $('#readAllBtn');
-  if(b) b.addEventListener('click', async () => { await api('/api/notifications/read', {method:'POST'}); refreshNotifBadge(); viewNotifications(); });
-}
-const AVATAR_COLORS = ['#f59e0b','#79e1c2','#f472b6','#a78bfa','#60a5fa','#fb923c','#34d399','#f87171','#38bdf8','#c084fc'];
-const AVAILABLE_TITLES = ['篝火守护者','夜谈常客','话题之星','传火人','摸鱼大师','匿名用户'];
-
-async function viewProfile(){
-  setNav('profile');
-  const st = await api('/api/my/stats');
-  const my = await api('/api/my/topics');
-  const display = me.display_name || me.username;
-  const titleHtml = me.title ? `<span class="title-tag">${esc(me.title)}</span>` : '';
-  $('#view').innerHTML = `
-    <div class="panel">
-      <div class="profile-head">${avatarImg(me.username, 'xl', me.avatar_color, 96)}
-        <div><h2 class="no-margin">${esc(display)} ${titleHtml}</h2>
-        <div class="profile-meta">
-          <span class="pill ${me.role==='admin'?'':'mint'}">${me.role==='admin'?'管理员':'成员'}</span>
-          <span class="pill muted">${new Date(st.created).toLocaleDateString()} 加入</span>
-        </div>
-        <div class="profile-account">账号：${esc(me.username)}<span class="acct-note">（账号不可修改）</span></div>
-        <div class="profile-num">
-          <div class="pn"><b>${st.topics}</b><span>话题</span></div>
-          <div class="pn"><b>${st.replies}</b><span>回复</span></div>
-          <div class="pn"><b>${st.likes_given}</b><span>获赞</span></div>
-          <div class="pn"><b>${st.favorites}</b><span>收藏</span></div>
-        </div>
-        <div class="profile-actions">
-          <button class="primary" id="editProfileBtn">修改资料</button>
-          <button class="ghost" id="changePwBtn">修改密码</button>
-        </div></div>
-      </div>
-    </div>
-    <h3 class="section-title">我发起的话题</h3>
-    <div class="post-list">${my.topics.map(postCard).join('') || '<p class="empty-tip">还没有发起过话题。</p>'}</div>`;
-  $('#editProfileBtn').addEventListener('click', openEditProfile);
-  $('#changePwBtn').addEventListener('click', openChangePassword);
-}
-
-function openEditProfile(){
-  const titlePool = AVAILABLE_TITLES.includes(me.title) ? AVAILABLE_TITLES : [me.title, ...AVAILABLE_TITLES].filter(Boolean);
-  const titleOptions = [`<button type="button" class="title-pick ${!me.title?'active':''}" data-title="">不佩戴</button>`].concat(
-    titlePool.map(t => `<button type="button" class="title-pick ${me.title===t?'active':''}" data-title="${esc(t)}">${esc(t)}</button>`)
-  ).join('');
-  openModal(`
-    <h2>修改资料</h2>
-    <p class="meta">显示名与称号会展示在社区各处；头像颜色可在预设色块中自选。</p>
-    <div class="field"><label>显示名</label><input id="epName" maxlength="24" placeholder="留空则显示账号名" value="${esc(me.display_name || '')}"></div>
-    <div class="field"><label>称号（选择佩戴）</label>
-      <div class="title-picks" id="epTitles">${titleOptions}</div>
-    </div>
-    <div class="field"><label>头像颜色（选择色块）</label>
-      <div class="color-picks" id="epColors">
-        ${AVATAR_COLORS.map(c => `<button type="button" class="color-pick ${me.avatar_color===c?'active':''}" data-color="${c}" style="background:${c}" title="${c}"></button>`).join('')}
-        <button type="button" class="color-pick auto ${!me.avatar_color?'active':''}" data-color="" title="自动（按名字生成）">自动</button>
-      </div>
-    </div>
-    <div class="form-actions"><button class="primary" id="epSave">保存</button><button class="ghost" data-action="close-modal">取消</button></div>`, 'editProfile');
-  let pickedColor = me.avatar_color || '';
-  let pickedTitle = me.title || '';
-  $('#epColors').addEventListener('click', e => {
-    const b = e.target.closest('.color-pick');
-    if(!b) return;
-    pickedColor = b.dataset.color;
-    $$('#epColors .color-pick').forEach(x => x.classList.toggle('active', x === b));
-  });
-  $('#epTitles').addEventListener('click', e => {
-    const b = e.target.closest('.title-pick');
-    if(!b) return;
-    pickedTitle = b.dataset.title;
-    $$('#epTitles .title-pick').forEach(x => x.classList.toggle('active', x === b));
-  });
-  $('#epSave').addEventListener('click', async () => {
-    try {
-      const name = $('#epName').value.trim();
-      if(name.length > 24) throw new Error('显示名最长 24 个字符');
-      const patch = { avatar_color: pickedColor, title: pickedTitle };
-      if(name !== (me.display_name || '')) patch.display_name = name;
-      const d = await api('/api/my/profile', {method:'PATCH', body: JSON.stringify(patch)});
-      me = d.user;
-      closeModal();
-      toast('资料已更新');
-      renderSideAccount();
-      viewProfile();
-    } catch(e){ toast(e.message, true); }
-  });
-}
-
-function openChangePassword(){
-  openModal(`
-    <h2>修改密码</h2>
-    <p class="meta">输入原密码与新密码，新密码须为 6–128 个字符。</p>
-    <div class="field"><label>原密码</label><input id="pwOld" type="password" autocomplete="current-password" placeholder="请输入原密码"></div>
-    <div class="field"><label>新密码</label><input id="pwNew" type="password" autocomplete="new-password" placeholder="6–128 个字符"></div>
-    <div class="field"><label>确认新密码</label><input id="pwNew2" type="password" autocomplete="new-password" placeholder="再次输入新密码"></div>
-    <div class="form-actions"><button class="primary" id="pwSave">修改密码</button><button class="ghost" data-action="close-modal">取消</button></div>`, 'changePassword');
-  $('#pwSave').addEventListener('click', async () => {
-    const oldP = $('#pwOld').value;
-    const n1 = $('#pwNew').value;
-    const n2 = $('#pwNew2').value;
-    if(!oldP){ toast('请输入原密码', true); return; }
-    if(n1.length < 6 || n1.length > 128){ toast('新密码须为 6–128 个字符', true); return; }
-    if(n1 !== n2){ toast('两次输入的新密码不一致', true); return; }
-    try {
-      await api('/api/my/password', {method:'POST', body: JSON.stringify({old_password: oldP, new_password: n1})});
-      closeModal();
-      toast('密码已修改');
-    } catch(e){ toast(e.message, true); }
-  });
-}
-
-/* ---------- 通知角标 ---------- */
-async function refreshNotifBadge(){
-  try {
-    const d = await api('/api/notifications');
-    const n = d.unread || 0;
-    const b = $('#notifBadge');
-    b.textContent = n > 99 ? '99+' : n;
-    b.classList.toggle('hidden', n === 0);
-  } catch {}
-}
-
-/* ---------- 聊天室 ---------- */
-function bindChat(){
-  const input = $('#chatInput');
-  const sendBtn = $('#chatSend');
-  const emojiBtn = $('#emojiBtn');
-  sendBtn.addEventListener('click', sendChat);
-  input.addEventListener('keydown', e => { if(e.key === 'Enter') sendChat(); });
-  emojiBtn.addEventListener('click', () => {
-    const pop = $('#emojiPop');
-    if(pop.classList.contains('hidden')){
-      pop.innerHTML = EMOJIS.map(e => `<button data-action="emoji" data-e="${e}">${e}</button>`).join('');
-      pop.classList.remove('hidden');
-    } else pop.classList.add('hidden');
-  });
-  $('#eventJoinBtn').addEventListener('click', async () => {
-    try {
-      await api('/api/events/' + currentEventId + '/join', {method:'POST'});
-      toast('已报名活动');
-      refreshEventCard();
-    } catch(e){ toast(e.message, true); }
-  });
-}
-let currentEventId = 0;
-function sendChat(){
-  const input = $('#chatInput');
-  const v = (input.value || '').trim();
-  if(!v) return;
-  if(!ws || ws.readyState !== 1){ toast('连接未就绪，请稍后再试', true); return; }
-  ws.send(JSON.stringify({body: v}));
-  input.value = '';
-}
-function connectChat(){
-  if(ws){ try{ ws.close(); }catch{} }
-  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
-  ws.onopen = () => {};
-  ws.onclose = () => { onlineCount = 0; updateOnline(); };
-  ws.onerror = () => {};
-  ws.onmessage = e => {
-    let d;
-    try { d = JSON.parse(e.data); } catch { return; }
-    if(d.type === 'message') addChatMsg(d.payload);
-    else if(d.type === 'presence'){ onlineCount = Array.isArray(d.payload) ? d.payload.length : 0; updateOnline(); }
-    else if(d.type === 'error') toast(d.payload || '发送失败', true);
-  };
-}
-function addChatMsg(m){
-  const box = $('#chatMessages');
-  if(!box) return;
-  const own = me && m.user_id === me.id;
-  const el = document.createElement('div');
-  el.className = 'chat-msg' + (own ? ' own' : '');
-  el.innerHTML = `${avatarImg(m.username, '', m.avatar_color)}<div class="chat-bubble"><div class="who"><b>${esc(m.display_name || m.username)}</b>${m.title ? `<span class="title-tag">${esc(m.title)}</span>` : ''}<time>${new Date(m.created).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}</time></div><p>${esc(m.body)}</p></div>`;
-  box.appendChild(el);
-  box.scrollTop = box.scrollHeight;
-}
-function updateOnline(){ const el = $('#onlineCount'); if(el) el.textContent = onlineCount; }
-async function refreshEventCard(){
-  try {
-    const evs = await api('/api/events?limit=1');
-    const ev = evs[0];
-    if(!ev) return;
-    currentEventId = ev.id;
-    $('#eventTitle').textContent = ev.title;
-    $('#eventTime').textContent = new Date(ev.start_time).toLocaleString('zh-CN', {month:'long', day:'numeric', hour:'2-digit', minute:'2-digit'});
-    const btn = $('#eventJoinBtn');
-    btn.textContent = ev.joined ? '✔ 已参加' : '我要参加';
-    btn.classList.toggle('mini-btn', true);
-  } catch {}
-}
-
-/* ---------- Modal ---------- */
-function openModal(html){
-  $('#modalRoot').innerHTML = `<div class="modal-mask"><div class="modal">${html}</div></div>`;
-  $('#modalRoot .modal-mask').addEventListener('click', e => { if(e.target.classList.contains('modal-mask')) closeModal(); });
-}
-function closeModal(){ $('#modalRoot').innerHTML = ''; }
 
 /* ---------- 全局事件委托 ---------- */
-document.addEventListener('click', e => {
+document.addEventListener('click', async e => {
   const el = e.target.closest('[data-action]');
-  if(!el) return;
-  const action = el.dataset.action;
-  if(action === 'open-topic') openTopic(el.dataset.id);
-  else if(action === 'filter'){ currentFilter = el.dataset.filter; viewTopics(); }
-  else if(action === 'go-topics') viewTopics();
-  else if(action === 'topic-page'){ topicPage = Number(el.dataset.page); viewTopics(); }
-  else if(action === 'reply-page') openTopic(el.dataset.id, Number(el.dataset.page));
-  else if(action === 'like') doLike(el);
-  else if(action === 'fav') doFav(el);
-  else if(action === 'event-join') doEventJoin(el);
-  else if(action === 'admin-pin') doAdminPin(el);
-  else if(action === 'admin-close') doAdminClose(el);
-  else if(action === 'admin-delete') doAdminDelete(el);
-  else if(action === 'emoji'){ const inp = $('#chatInput'); inp.value += el.dataset.e; inp.focus(); $('#emojiPop').classList.add('hidden'); }
-  else if(action === 'close-modal') closeModal();
+  if (!el) return;
+  const a = el.dataset.action;
+  if (a === 'nav') switchView(el.dataset.view);
+  else if (a === 'create-char') createCharacter(el.dataset.race);
+  else if (a === 'equip') equipItem(el.dataset.id);
+  else if (a === 'unequip') unequipItem(el.dataset.id);
+  else if (a === 'bp-tab') { currentBackpackTab = el.dataset.tab; renderBackpackList(); }
+  else if (a === 'forge-tab') { currentForgeTab = el.dataset.tab; renderForgeList(); }
+  else if (a === 'forge') forgeItem(el.dataset.kind, el.dataset.name);
+  else if (a === 'dungeon-start') startDungeon();
+  else if (a === 'dungeon-event') dungeonEvent(el.dataset.choice || '');
+  else if (a === 'dungeon-settle') dungeonSettle();
+  else if (a === 'save-settings') saveDungeonSettings();
+  else if (a === 'shop-buy') shopBuy(el.dataset.name);
+  else if (a === 'open-profile') { switchView('profile'); }
+  else if (a === 'close-modal') closeModal();
+  else if (a === 'edit-profile') openEditProfile();
+  else if (a === 'change-password') openChangePassword();
 });
-async function doLike(btn){
-  try {
-    const d = await api('/api/topics/' + btn.dataset.id + '/like', {method:'POST'});
-    btn.classList.toggle('liked', d.liked);
-    btn.textContent = '❤ ' + d.likes;
-    if(d.liked) toast('已点赞 🔥');
-  } catch(e){ toast(e.message, true); }
-}
-async function doFav(btn){
-  try {
-    const d = await api('/api/topics/' + btn.dataset.id + '/favorite', {method:'POST'});
-    btn.classList.toggle('faved', d.faved);
-    btn.textContent = '⭐ ' + (d.faved ? '已收藏' : '收藏');
-  } catch(e){ toast(e.message, true); }
-}
-async function doEventJoin(btn){
-  try {
-    const d = await api('/api/events/' + btn.dataset.id + '/join', {method:'POST'});
-    toast(d.joined ? '已参加活动' : '已取消参加');
-    viewEvents();
-  } catch(e){ toast(e.message, true); }
-}
 
-/* ---------- 管理员操作 ---------- */
-async function adminPatchTopic(id, patch){
-  return api('/api/topics/' + id, {method:'PATCH', body:JSON.stringify({pinned:!!patch.pinned, closed:!!patch.closed})});
-}
-function currentViewName(){
-  const active = $('#sideNav button.active');
-  return active ? active.dataset.view : 'topics';
-}
-function refreshAfterAdmin(opts = {}){
-  const inDetail = !!document.querySelector('.topic-detail');
-  if(inDetail && !opts.deleted){ openTopic(opts.id); return; }
-  const v = currentViewName();
-  if(v === 'home') viewHome();
-  else if(v === 'favorites') viewFavorites();
-  else if(v === 'creations') viewCreations();
-  else if(v === 'resources') viewResources();
-  else if(v === 'profile') viewProfile();
-  else viewTopics();
-}
-async function doAdminPin(btn){
-  try {
-    const id = btn.dataset.id;
-    const cur = { pinned: btn.dataset.pinned === '1', closed: btn.dataset.closed === '1' };
-    await adminPatchTopic(id, { pinned: !cur.pinned, closed: cur.closed });
-    toast(cur.pinned ? '已取消置顶' : '已置顶');
-    refreshAfterAdmin({ id });
-  } catch(e){ toast(e.message, true); }
-}
-async function doAdminClose(btn){
-  try {
-    const id = btn.dataset.id;
-    const cur = { pinned: btn.dataset.pinned === '1', closed: btn.dataset.closed === '1' };
-    await adminPatchTopic(id, { pinned: cur.pinned, closed: !cur.closed });
-    toast(cur.closed ? '已开放回复' : '已关闭回复');
-    refreshAfterAdmin({ id });
-  } catch(e){ toast(e.message, true); }
-}
-async function doAdminDelete(btn){
-  const ok = window.confirm('确定删除这个帖子吗？删除后不可恢复。');
-  if(!ok) return;
-  try {
-    await api('/api/topics/' + btn.dataset.id, {method:'DELETE'});
-    toast('帖子已删除');
-    refreshAfterAdmin({ deleted: true });
-  } catch(e){ toast(e.message, true); }
-}
+/* ================================================================
+ * 登录 / 注册（保留：邀请码门槛）
+ * ================================================================ */
+const PW_RULES = [
+  ['至少 8 位', v => v.length >= 8],
+  ['同时包含字母与数字', v => /[A-Za-z]/.test(v) && /\d/.test(v)],
+  ['无中文', v => !/[\u4e00-\u9fa5]/.test(v)]
+];
+function pwValid(pw) { return PW_RULES.every(([, fn]) => fn(pw)); }
 
-/* ---------- 图片上传 UI 增强 ---------- */
-function insertImageMarkdown(ta, md){
-  ta.focus();
-  const start = ta.selectionStart, end = ta.selectionEnd;
-  const before = ta.value.slice(0, start), after = ta.value.slice(end);
-  const needLf = before && !/\n$/.test(before);
-  const insert = (needLf ? '\n' : '') + md + '\n';
-  ta.value = before + insert + after;
-  const pos = start + insert.length;
-  ta.selectionStart = ta.selectionEnd = pos;
-}
-function setBtnLoading(btn, loading){
-  if(!btn) return;
-  btn.disabled = loading;
-  btn.classList.toggle('loading', loading);
-  btn.textContent = loading ? '⏳ 上传中…' : '🖼️ 图片';
-}
-
-/* ---------- 响应式 UI 绑定 ---------- */
-function bindResponsiveUI(){
-  const sidebar = document.querySelector('.sidebar');
-  const mask = $('#sideMask');
-  const openSide = () => { sidebar.classList.add('open'); mask.classList.add('open'); };
-  const closeSide = () => { sidebar.classList.remove('open'); mask.classList.remove('open'); };
-  $('#menuBtn').addEventListener('click', openSide);
-  if(mask) mask.addEventListener('click', closeSide);
-  $('#chatCloseBtn').addEventListener('click', () => {
-    $('#chatPanel').classList.remove('open');
-    $('#chatToggleBtn').classList.add('show');
+function renderAuth() {
+  $('#authCard').innerHTML = `
+    <div class="auth-tabs">
+      <button id="tabLogin" class="active">登录</button>
+      <button id="tabRegister">注册</button>
+    </div>
+    <div id="authLogin">
+      <h2 class="auth-title">欢迎回来 ✦</h2>
+      <p class="auth-sub">围坐在篝火旁，继续你的冒险</p>
+      <label class="field"><span>账号</span><input id="loginUser" maxlength="30" autocomplete="username" placeholder="用户名"></label>
+      <label class="field"><span>密码</span><input id="loginPass" type="password" maxlength="72" autocomplete="current-password" placeholder="密码"></label>
+      <button class="primary full" id="loginBtn">登录</button>
+      <p class="form-tip">还没有账号？<a href="#" id="toRegister">去注册</a></p>
+    </div>
+    <div id="authRegister" class="hidden">
+      <h2 class="auth-title">加入篝火 ✦</h2>
+      <p class="auth-sub">本社区采用邀请制，需要邀请码才能加入</p>
+      <label class="field"><span>邀请码</span><input id="regInvite" maxlength="40" placeholder="邀请码"></label>
+      <label class="field"><span>用户名</span><input id="regUser" maxlength="30" autocomplete="username" placeholder="用户名"></label>
+      <label class="field"><span>密码</span><input id="regPass" type="password" maxlength="72" autocomplete="new-password" placeholder="密码"></label>
+      <label class="field"><span>确认密码</span><input id="regPass2" type="password" maxlength="72" autocomplete="new-password" placeholder="再次输入密码"></label>
+      <p class="hint-list" id="regHint"></p>
+      <button class="primary full" id="registerBtn">注册</button>
+      <p class="form-tip">已有账号？<a href="#" id="toLogin">去登录</a></p>
+    </div>`;
+  $('#tabLogin').onclick = () => { $('#authLogin').classList.remove('hidden'); $('#authRegister').classList.add('hidden'); $('#tabLogin').classList.add('active'); $('#tabRegister').classList.remove('active'); };
+  $('#tabRegister').onclick = () => { $('#authLogin').classList.add('hidden'); $('#authRegister').classList.remove('hidden'); $('#tabRegister').classList.add('active'); $('#tabLogin').classList.remove('active'); };
+  $('#toRegister').onclick = e => { e.preventDefault(); $('#tabRegister').click(); };
+  $('#toLogin').onclick = e => { e.preventDefault(); $('#tabLogin').click(); };
+  $('#loginBtn').onclick = doLogin;
+  $('#registerBtn').onclick = doRegister;
+  $('#loginPass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+  $('#regPass').addEventListener('input', () => renderPwHint());
+  ['loginUser', 'loginPass', 'regInvite', 'regUser', 'regPass', 'regPass2'].forEach(id => {
+    $('#' + id).addEventListener('keydown', e => { if (e.key === 'Enter') { id.startsWith('login') ? doLogin() : doRegister(); } });
   });
-  $('#chatToggleBtn').addEventListener('click', () => {
-    $('#chatPanel').classList.add('open');
-    $('#chatToggleBtn').classList.remove('show');
-  });
-  const syncChatFab = () => {
-    const narrow = window.innerWidth <= 1024;
-    const open = $('#chatPanel').classList.contains('open');
-    $('#chatToggleBtn').classList.toggle('show', narrow && !open);
+}
+
+function renderPwHint() {
+  const pw = $('#regPass').value;
+  $('#regHint').innerHTML = PW_RULES.map(([label, fn]) =>
+    `<span class="rule ${fn(pw) ? 'ok' : 'bad'}">${fn(pw) ? '✓' : '✗'} ${label}</span>`).join('');
+}
+
+async function doLogin() {
+  const username = $('#loginUser').value.trim();
+  const password = $('#loginPass').value;
+  if (!username || !password) return toast('请输入账号和密码', true);
+  try {
+    const d = await api('/api/login', { method: 'POST', body: { username, password } });
+    ME = d.user;
+    enterShell();
+    toast('欢迎回来，' + (ME.display_name || ME.username));
+  } catch (e) { toast(e.message, true); }
+}
+
+async function doRegister() {
+  const invite = $('#regInvite').value.trim();
+  const username = $('#regUser').value.trim();
+  const password = $('#regPass').value;
+  const password2 = $('#regPass2').value;
+  if (!invite) return toast('请输入邀请码', true);
+  if (!username) return toast('请输入用户名', true);
+  if (!pwValid(password)) return toast('密码需至少 8 位且同时包含字母与数字', true);
+  if (password !== password2) return toast('两次输入的密码不一致', true);
+  try {
+    await api('/api/register', { method: 'POST', body: { invite, username, password } });
+    const u = await api('/api/me');
+    ME = u.user || u;
+    enterShell();
+    toast('注册成功，欢迎加入篝火！');
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ================================================================
+ * 聊天室（保留：实时聊天）
+ * ================================================================ */
+let ws = null, chatReconnect = null;
+
+function connectChat() {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/ws`);
+  ws.onopen = () => { $('#chatSend').disabled = false; toast('已连接聊天室'); };
+  ws.onclose = () => {
+    $('#chatSend').disabled = true;
+    clearTimeout(chatReconnect);
+    chatReconnect = setTimeout(connectChat, 3000);
   };
-  window.addEventListener('resize', () => {
-    if(window.innerWidth > 860) closeSide();
-    if(window.innerWidth > 1024){
-      $('#chatPanel').classList.remove('open');
-      $('#chatToggleBtn').classList.remove('show');
-    } else {
-      syncChatFab();
-    }
-  });
-  syncChatFab();
+  ws.onmessage = ev => {
+    let msg; try { msg = JSON.parse(ev.data); } catch { return; }
+    if (msg.type === 'presence') { $('#onlineCount').textContent = (msg.payload || []).length; }
+    else if (msg.type === 'message') addChatMsg(msg.payload || msg);
+  };
 }
 
-boot();
+function addChatMsg(msg) {
+  const wrap = $('#chatMessages');
+  const isMe = ME && msg.user_id === ME.id;
+  const div = document.createElement('div');
+  div.className = 'chat-msg' + (isMe ? ' mine' : '');
+  div.innerHTML = `${avatarImg(msg)}<div class="msg-body"><span class="msg-name">${esc(msg.display_name || msg.username)}</span><span class="msg-time">${fmtTime(msg.created)}</span><div class="msg-text">${esc(msg.body)}</div></div>`;
+  wrap.appendChild(div);
+  wrap.scrollTop = wrap.scrollHeight;
+  while (wrap.children.length > 200) wrap.removeChild(wrap.firstChild);
+}
+
+async function sendChat() {
+  const input = $('#chatInput');
+  const text = input.value.trim();
+  if (!text) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return toast('聊天室未连接', true);
+  input.value = '';
+  try { ws.send(JSON.stringify({ body: text })); }
+  catch (e) { toast(e.message, true); input.value = text; }
+}
+
+function bindChat() {
+  $('#chatSend').onclick = sendChat;
+  $('#chatInput').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } });
+  $('#emojiBtn').onclick = e => { e.stopPropagation(); $('#emojiPop').classList.toggle('hidden'); };
+  document.addEventListener('click', e => { if (!e.target.closest('.chat-input')) $('#emojiPop').classList.add('hidden'); });
+  const EMOJIS = ['😀','😂','🥰','😎','🤔','😭','👍','👏','🔥','⭐','🎉','🍺','🍗','⚔️','🛡️','🗺️','🐺','🧟','💀','🪙'];
+  $('#emojiPop').innerHTML = EMOJIS.map(x => `<button type="button" class="emoji">${x}</button>`).join('');
+  $('#emojiPop').addEventListener('click', e => {
+    const b = e.target.closest('.emoji');
+    if (!b) return;
+    const inp = $('#chatInput');
+    inp.value += b.textContent;
+    inp.focus();
+  });
+  $('#chatCloseBtn').onclick = () => setChatOpen(false);
+  $('#chatToggleBtn').onclick = () => setChatOpen(true);
+}
+
+function setChatOpen(open) {
+  chatOpen = open;
+  const panel = $('#chatPanel'), fab = $('#chatToggleBtn');
+  panel.classList.toggle('open', open);
+  fab.classList.toggle('hidden', open);
+  $('#chatCloseBtn').classList.toggle('hidden', !open);
+  if (open) $('#chatInput').focus();
+}
+
+/* ================================================================
+ * 个人资料（保留：资料编辑 / 改密码）
+ * ================================================================ */
+async function viewProfile() {
+  setNav('profile');
+  $('#view').innerHTML = '<p class="empty-tip">加载中…</p>';
+  try {
+    const d = await api('/api/me');
+    const u = d.user || d;
+    let rpgHtml = '';
+    try {
+      const c = await api('/api/rpg/character');
+      const ch = c.character;
+      rpgHtml = `<div class="profile-rpg glass"><h3>冒险档案</h3><p><b>${RACE_INFO[ch.race]?.ico || ''} ${esc(ch.race)}</b> · Lv.${ch.level} · 🪙 ${ch.gold}</p><p>经验 ${ch.exp} / ${ch.level * 100} · 生命 ${ch.cur_hp}/${ch.max_hp}</p><p>第一章 Boss 击杀 ${ch.boss_kills_ch1} 次 · 第二章 Boss 击杀 ${ch.boss_kills_ch2} 次</p></div>`;
+    } catch { rpgHtml = `<div class="profile-rpg glass"><h3>冒险档案</h3><p>尚未创建角色，前往「角色」页开始冒险吧。</p></div>`; }
+    $('#view').innerHTML = `
+      <div class="profile-head glass">
+        ${avatarImg(u)}
+        <div>
+          <h2>${esc(u.display_name || u.username)}</h2>
+          <p class="muted">@${esc(u.username)} · 加入于 ${fmtDate(u.created)}</p>
+          ${u.title ? `<p class="profile-title">${esc(u.title)}</p>` : ''}
+        </div>
+        <div class="profile-actions">
+          <button class="primary" data-action="edit-profile">编辑资料</button>
+          <button class="ghost" data-action="change-password">修改密码</button>
+        </div>
+      </div>
+      ${rpgHtml}`;
+  } catch (e) {
+    $('#view').innerHTML = `<p class="empty-tip">加载失败：${esc(e.message)}</p>`;
+  }
+}
+
+function openEditProfile() {
+  openModal(`
+    <h3 class="modal-title">编辑资料</h3>
+    <label class="field"><span>显示名</span><input id="editDisplay" maxlength="30" value="${esc(ME.display_name || '')}" placeholder="显示名"></label>
+    <label class="field"><span>称号</span><input id="editTitle" maxlength="30" value="${esc(ME.title || '')}" placeholder="自定义称号"></label>
+    <label class="field"><span>头像颜色</span><div class="color-row">${AVATAR_COLORS.map(c => `<button type="button" class="color-dot" data-color="${c}" style="background:${c}"></button>`).join('')}</div></label>
+    <div class="modal-actions">
+      <button class="primary" id="saveProfileBtn">保存</button>
+      <button class="ghost" data-action="close-modal">取消</button>
+    </div>`);
+  let chosen = ME.avatar_color || '';
+  $('#modalRoot .color-dot').forEach(b => {
+    b.classList.toggle('active', b.dataset.color === chosen);
+    b.onclick = () => { chosen = b.dataset.color; $('#modalRoot .color-dot').forEach(x => x.classList.toggle('active', x === b)); };
+  });
+  $('#saveProfileBtn').onclick = async () => {
+    try {
+      const d = await api('/api/me', { method: 'PATCH', body: { display_name: $('#editDisplay').value.trim() || ME.username, title: $('#editTitle').value.trim(), avatar_color: chosen } });
+      ME = d.user || d;
+      closeModal();
+      viewProfile();
+      renderSideAccount();
+      toast('资料已更新');
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
+function openChangePassword() {
+  openModal(`
+    <h3 class="modal-title">修改密码</h3>
+    <label class="field"><span>当前密码</span><input id="oldPass" type="password" maxlength="72" autocomplete="current-password"></label>
+    <label class="field"><span>新密码</span><input id="newPass" type="password" maxlength="72" autocomplete="new-password"></label>
+    <label class="field"><span>确认新密码</span><input id="newPass2" type="password" maxlength="72" autocomplete="new-password"></label>
+    <p class="form-tip">新密码需至少 8 位且同时包含字母与数字</p>
+    <div class="modal-actions">
+      <button class="primary" id="changePwBtn">确认修改</button>
+      <button class="ghost" data-action="close-modal">取消</button>
+    </div>`);
+  $('#changePwBtn').onclick = async () => {
+    const oldPass = $('#oldPass').value, np = $('#newPass').value, np2 = $('#newPass2').value;
+    if (!pwValid(np)) return toast('新密码需至少 8 位且同时包含字母与数字', true);
+    if (np !== np2) return toast('两次输入的新密码不一致', true);
+    try {
+      await api('/api/me/password', { method: 'PATCH', body: { old_password: oldPass, new_password: np } });
+      closeModal();
+      toast('密码已修改');
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
+function renderSideAccount() {
+  if (!ME) return;
+  $('#sideAccount').innerHTML = `
+    <button class="account-btn" data-action="open-profile">
+      ${avatarImg(ME)}
+      <div><div class="acct-name">${esc(ME.display_name || ME.username)}</div><div class="acct-sub">@${esc(ME.username)}</div></div>
+    </button>`;
+}
+
+/* ================================================================
+ * RPG —— 角色页
+ * ================================================================ */
+function expNeed(level) { return level * 100; }
+
+async function viewCharacter() {
+  setNav('character');
+  $('#view').innerHTML = '<p class="empty-tip">加载中…</p>';
+  try {
+    const d = await api('/api/rpg/character');
+    rpg.char = d.character;
+    rpg.gold = d.character.gold;
+    updateGold();
+    let st = null;
+    try { st = await api('/api/rpg/dungeon/status'); rpg.dungeon = st; } catch {}
+    $('#view').innerHTML = renderCharacter(d.character, st);
+  } catch (e) {
+    rpg.char = null;
+    if (/尚未创建角色/.test(e.message)) $('#view').innerHTML = renderCharacterCreate();
+    else { toast(e.message, true); $('#view').innerHTML = '<p class="empty-tip">加载失败</p>'; }
+  }
+}
+
+function renderCharacterCreate() {
+  return `
+    <div class="page-title"><h2>创建角色</h2><p class="muted">选择你的种族，开启篝火冒险</p></div>
+    <div class="race-grid">
+      ${Object.entries(RACE_INFO).map(([race, info]) => `
+        <div class="race-card glass">
+          <div class="race-ico">${info.ico}</div>
+          <div class="race-name">${esc(race)} <span class="race-tag">${info.tag}</span></div>
+          <p class="race-desc">${info.desc}</p>
+          <button class="primary full" data-action="create-char" data-race="${esc(race)}">选择此种族</button>
+        </div>`).join('')}
+    </div>`;
+}
+
+async function createCharacter(race) {
+  try {
+    const d = await api('/api/rpg/character/create', { method: 'POST', body: { race } });
+    rpg.char = d.character;
+    rpg.gold = d.character.gold;
+    updateGold();
+    toast('角色创建成功！');
+    viewCharacter();
+  } catch (e) { toast(e.message, true); }
+}
+
+function renderCharacter(c, st) {
+  const hpPct = c.max_hp ? Math.round(c.cur_hp / c.max_hp * 100) : 0;
+  const race = RACE_INFO[c.race] || { ico: '🎮', tag: '' };
+  const slots = [
+    { loc: 'weapon', label: '武器', ico: '⚔️' },
+    { loc: 'armor', label: '护甲', ico: '🛡️' },
+    { loc: 'accessory', label: '饰品', ico: '📿' }
+  ];
+  const equipped = (c.equipped || []).filter(x => x.location && x.location.startsWith('equipped_'));
+  const getEquipped = loc => equipped.find(x => x.location === 'equipped_' + loc);
+  const remaining = st ? st.remaining : Math.max(0, 5 - (c.daily_count || 0));
+
+  return `
+    <div class="page-title"><h2>角色</h2><p class="muted">${esc(c.race)} · ${esc(race.tag)}</p></div>
+
+    <section class="panel glass rpg-head">
+      <div class="rpg-head-top">
+        <div class="char-ico">${race.ico}</div>
+        <div class="char-meta">
+          <div class="char-name">Lv.${c.level} ${esc(c.race)}</div>
+          <div class="exp-row"><div class="exp-bar"><i style="width:${c.level >= 6 ? 100 : Math.min(100, Math.round(c.exp / expNeed(c.level) * 100))}%"></i></div><span class="exp-text">${c.level >= 6 ? 'MAX' : `${c.exp} / ${expNeed(c.level)}`}</span></div>
+        </div>
+        <div class="gold-big">🪙 ${c.gold}</div>
+      </div>
+      <div class="hp-row"><span>生命</span><div class="hp-bar"><i style="width:${hpPct}%"></i></div><span>${c.cur_hp} / ${c.max_hp}</span></div>
+    </section>
+
+    <section class="panel glass">
+      <h3 class="panel-title">属性</h3>
+      <div class="attr-grid">
+        <div class="attr-cell"><span>攻击</span><b>${c.attack}</b></div>
+        <div class="attr-cell"><span>防御</span><b>${c.defense}</b></div>
+        <div class="attr-cell"><span>暴击率</span><b>${c.crit_rate}%</b></div>
+        <div class="attr-cell"><span>暴击伤害</span><b>${c.crit_dmg}%</b></div>
+        <div class="attr-cell"><span>金币加成</span><b>${c.gold_bonus}%</b></div>
+        <div class="attr-cell"><span>今日副本</span><b>${remaining} 次</b></div>
+        <div class="attr-cell"><span>一章 Boss</span><b>${c.boss_kills_ch1} 次</b></div>
+        <div class="attr-cell"><span>二章 Boss</span><b>${c.boss_kills_ch2} 次</b></div>
+      </div>
+    </section>
+
+    <section class="panel glass">
+      <h3 class="panel-title">装备栏</h3>
+      <div class="equip-grid">
+        ${slots.map(s => {
+          const it = getEquipped(s.loc);
+          return `<div class="equip-slot">
+            <div class="slot-ico">${s.ico}</div>
+            <div class="slot-label">${s.label}</div>
+            ${it ? `
+              <div class="slot-item ${QUALITY_CLASS[it.quality] || 'q-normal'}">
+                <div class="slot-name">${esc(it.name)} ${qualityBadge(it.quality)}</div>
+                <div class="slot-stats">${statsText(it.stats)}</div>
+                <button class="ghost sm" data-action="unequip" data-id="${it.id}">卸下</button>
+              </div>` : `<div class="slot-empty">空位</div>`}
+          </div>`;
+        }).join('')}
+      </div>
+    </section>`;
+}
+
+/* ================================================================
+ * RPG —— 背包页
+ * ================================================================ */
+async function viewBackpack() {
+  setNav('backpack');
+  $('#view').innerHTML = '<p class="empty-tip">加载中…</p>';
+  try {
+    const d = await api('/api/rpg/backpack');
+    rpg.backpack = d.backpack;
+    rpg.gold = d.gold;
+    updateGold();
+    $('#view').innerHTML = `
+      <div class="page-title"><h2>背包</h2><p class="muted">🪙 ${rpg.gold} 金币</p></div>
+      <div class="tabs" id="bpTabs">
+        <button data-action="bp-tab" data-tab="equipment" class="active">装备</button>
+        <button data-action="bp-tab" data-tab="consumable">消耗品</button>
+        <button data-action="bp-tab" data-tab="material">材料</button>
+        <button data-action="bp-tab" data-tab="quest">任务物品</button>
+      </div>
+      <div id="bpList"></div>`;
+    renderBackpackList();
+  } catch (e) {
+    if (/尚未创建角色/.test(e.message)) { $('#view').innerHTML = `<p class="empty-tip">尚未创建角色，请先前往「角色」页创建。</p>`; }
+    else { toast(e.message, true); $('#view').innerHTML = '<p class="empty-tip">加载失败</p>'; }
+  }
+}
+
+function renderBackpackList() {
+  $$('#bpTabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === currentBackpackTab));
+  const b = rpg.backpack;
+  if (!b) return;
+  const wrap = $('#bpList');
+  const eq = b.equipment || [];
+  const group = {
+    equipment: eq,
+    consumable: b.consumable || [],
+    material: b.material || [],
+    quest: b.quest || []
+  }[currentBackpackTab] || [];
+  if (!group.length) {
+    wrap.innerHTML = `<p class="empty-tip">空空如也，去副本或商店里获得一些物品吧。</p>`;
+    return;
+  }
+  if (currentBackpackTab === 'equipment') {
+    wrap.innerHTML = `<div class="item-grid">${group.map(it => `
+      <div class="item-card ${QUALITY_CLASS[it.quality] || 'q-normal'}">
+        <div class="item-ico">${TYPE_ICO[it.type] || '📦'}</div>
+        <div class="item-name">${esc(it.name)} ${qualityBadge(it.quality)}</div>
+        <div class="item-stats">${statsText(it.stats)}</div>
+        <button class="primary sm" data-action="equip" data-id="${it.id}">装备</button>
+      </div>`).join('')}</div>`;
+  } else {
+    wrap.innerHTML = `<div class="stack-list">${group.map(it => `
+      <div class="stack-row glass">
+        <span class="stack-ico">${TYPE_ICO[it.type] || '📦'}</span>
+        <span class="stack-name">${esc(it.name)}${it.quality && it.quality !== 'normal' ? ' ' + qualityBadge(it.quality) : ''}</span>
+        ${it.stats && Object.keys(it.stats).length ? `<span class="stack-stats">${statsText(it.stats)}</span>` : ''}
+        <span class="stack-qty">×${it.quantity}</span>
+      </div>`).join('')}</div>`;
+  }
+}
+
+async function equipItem(id) {
+  try {
+    const d = await api('/api/rpg/equip', { method: 'POST', body: { item_id: Number(id) } });
+    rpg.char = d.character; rpg.gold = d.character.gold; updateGold();
+    toast('装备成功');
+    await viewBackpack();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function unequipItem(id) {
+  try {
+    const d = await api('/api/rpg/unequip', { method: 'POST', body: { item_id: Number(id) } });
+    rpg.char = d.character; rpg.gold = d.character.gold; updateGold();
+    toast('已卸下装备');
+    viewCharacter();
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ================================================================
+ * RPG —— 副本页
+ * ================================================================ */
+async function viewDungeon() {
+  setNav('dungeon');
+  $('#view').innerHTML = '<p class="empty-tip">加载中…</p>';
+  try {
+    const st = await api('/api/rpg/dungeon/status');
+    rpg.dungeon = st;
+    $('#view').innerHTML = renderDungeonPage(st);
+  } catch (e) {
+    if (/尚未创建角色/.test(e.message)) { $('#view').innerHTML = `<p class="empty-tip">尚未创建角色，请先前往「角色」页创建。</p>`; }
+    else { toast(e.message, true); $('#view').innerHTML = '<p class="empty-tip">加载失败</p>'; }
+  }
+}
+
+function renderDungeonPage(st) {
+  const ap = st.auto_potion || { enabled: true, threshold: 35, limit: 1 };
+  const ch2Locked = !st.ch2_unlocked;
+  if (st.in_dungeon) {
+    const p = st.dungeon_progress || {};
+    const hasCache = !!dungeonSession;
+    const doneCount = hasCache ? dungeonSession.idx : Math.max(0, p.next_slot - 1);
+    const curEv = hasCache ? dungeonSession.events[dungeonSession.idx] : null;
+    const encounterChoices = curEv && curEv.type === 'encounter' && curEv.choices && curEv.choices.length
+      ? `<div class="event-choices">${curEv.choices.map((c, i) => `<button class="choice" data-action="dungeon-event" data-choice="${i + 1}">${esc(c)}</button>`).join('')}</div>` : '';
+    return `
+      <div class="page-title"><h2>副本</h2><p class="muted">正在进行 · 第 ${p.chapter} 章</p></div>
+      <section class="panel glass">
+        <h3 class="panel-title">事件进度</h3>
+        ${hasCache ? renderEventTrack(dungeonSession.events, dungeonSession.idx) : `<p class="empty-tip">副本进行中（第 ${p.next_slot}/${p.total} 个事件）。刷新页面后无法预览事件，可继续挑战或直接结算。</p>`}
+        ${encounterChoices}
+        <div class="dungeon-actions">
+          <button class="primary" data-action="dungeon-event">${hasCache ? '挑战当前事件' : '继续挑战'}</button>
+          <button class="ghost" data-action="dungeon-settle">结算副本</button>
+        </div>
+      </section>
+      <section class="panel glass">
+        <h3 class="panel-title">自动战斗设置</h3>
+        ${renderSettingsForm(ap)}
+      </section>
+      ${renderDungeonSummary(st)}`;
+  }
+  return `
+    <div class="page-title"><h2>副本</h2><p class="muted">今日剩余 ${st.remaining} 次</p></div>
+    <section class="panel glass">
+      <h3 class="panel-title">选择章节</h3>
+      <div class="chapter-grid">
+        <div class="chapter-card ${st.chapter === 1 ? 'active' : ''}">
+          <div class="chapter-ico">🌲</div>
+          <div class="chapter-name">第一章 · 灰烬森林</div>
+          <p class="muted">等级 1 起 · 5 种怪物 · 3 种奇遇</p>
+        </div>
+        <div class="chapter-card ${st.chapter === 2 ? 'active' : ''} ${ch2Locked ? 'locked' : ''}">
+          <div class="chapter-ico">⛏️</div>
+          <div class="chapter-name">第二章 · 沉没矿坑</div>
+          <p class="muted">${ch2Locked ? '未解锁：需要 等级≥3 且击败第一章 Boss ≥1 次' : '已解锁'}</p>
+        </div>
+      </div>
+      <div class="dungeon-actions">
+        <label class="field inline"><span>章节</span>
+          <select id="dungeonChapter">
+            <option value="1">第一章 · 灰烬森林</option>
+            <option value="2" ${ch2Locked ? 'disabled' : ''}>第二章 · 沉没矿坑</option>
+          </select>
+        </label>
+        <button class="primary" data-action="dungeon-start">开始副本（消耗 1 次）</button>
+      </div>
+    </section>
+    <section class="panel glass">
+      <h3 class="panel-title">自动战斗设置</h3>
+      ${renderSettingsForm(ap)}
+    </section>
+    ${renderDungeonSummary(st)}`;
+}
+
+function renderDungeonSummary(st) {
+  return `
+    <section class="panel glass">
+      <h3 class="panel-title">冒险进度</h3>
+      <div class="attr-grid">
+        <div class="attr-cell"><span>今日已用</span><b>${st.daily_used} / 5</b></div>
+        <div class="attr-cell"><span>当前章节</span><b>第 ${st.chapter} 章</b></div>
+        <div class="attr-cell"><span>一章 Boss</span><b>${st.boss_kills_ch1} 次</b></div>
+        <div class="attr-cell"><span>二章 Boss</span><b>${st.boss_kills_ch2} 次</b></div>
+        <div class="attr-cell"><span>二章解锁</span><b>${st.ch2_unlocked ? '✅ 已解锁' : '❌ 未解锁'}</b></div>
+      </div>
+    </section>`;
+}
+
+function renderSettingsForm(ap) {
+  return `
+    <div class="settings-form">
+      <label class="switch-row"><span>自动使用药水</span><input type="checkbox" id="apEnabled" ${ap.enabled ? 'checked' : ''}></label>
+      <label class="field"><span>触发阈值（生命低于 %）</span><input type="number" id="apThreshold" min="1" max="99" value="${ap.threshold}"></label>
+      <label class="field"><span>每场最多使用次数</span><input type="number" id="apLimit" min="0" max="10" value="${ap.limit}"></label>
+      <button class="primary sm" data-action="save-settings">保存设置</button>
+    </div>`;
+}
+
+async function saveDungeonSettings() {
+  try {
+    const d = await api('/api/rpg/dungeon/settings', { method: 'POST', body: {
+      enabled: $('#apEnabled').checked,
+      threshold: Number($('#apThreshold').value),
+      limit: Number($('#apLimit').value)
+    }});
+    rpg.dungeon = { ...rpg.dungeon, auto_potion: d.auto_potion };
+    toast('自动战斗设置已保存');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function startDungeon() {
+  const chapter = Number($('#dungeonChapter').value || 1);
+  try {
+    const d = await api('/api/rpg/dungeon/start', { method: 'POST', body: { chapter } });
+    dungeonSession = { chapter: d.chapter, events: d.events, idx: 0 };
+    rpg.gold = 0; updateGold();
+    toast('副本开始！');
+    viewDungeon();
+  } catch (e) { toast(e.message, true); }
+}
+
+function renderEventTrack(events, idx) {
+  return `<div class="dungeon-track">
+    ${events.map((ev, i) => {
+      const cls = i < idx ? 'done' : (i === idx ? 'current' : 'todo');
+      const icon = ev.type === 'fight' ? (ev.tier === 'boss' ? '👑' : (ev.tier === 'elite' ? '💀' : '⚔️')) : '❓';
+      const label = i < idx ? '已完成' : (i === idx ? ev.name : '待探索');
+      return `<div class="slot-cell ${cls}"><div class="slot-ico">${icon}</div><div class="slot-name">${esc(label)}</div></div>`;
+    }).join('')}
+  </div>`;
+}
+
+async function dungeonEvent(choice) {
+  const body = {};
+  if (choice) body.choice = Number(choice);
+  try {
+    const ev = dungeonSession && dungeonSession.events[dungeonSession.idx];
+    if (ev && ev.type === 'encounter' && choice === '') {
+      toast('请先选择奇遇选项', true);
+      return;
+    }
+    const d = await api('/api/rpg/dungeon/event', { method: 'POST', body });
+    if (d.failed) {
+      dungeonSession = null;
+      $('#view').innerHTML = renderBattleResult(d, true) + `
+        <section class="panel glass"><h3 class="panel-title">战败结算</h3><p class="muted">本次副本失败，损失 ${d.gold_loss} 金币（保留经验与普通材料）。</p></section>`;
+      rpg.dungeon = { ...rpg.dungeon, in_dungeon: false };
+      return;
+    }
+    if (d.encounter) {
+      dungeonSession.idx++;
+      const finish = d.finished;
+      const cur = renderEncounterResult(d);
+      $('#view').innerHTML = `
+        <div class="page-title"><h2>副本 · 第 ${dungeonSession.chapter} 章</h2><p class="muted">奇遇</p></div>
+        <section class="panel glass">${renderEventTrack(dungeonSession.events, dungeonSession.idx)}</section>
+        ${cur}
+        <section class="panel glass"><div class="dungeon-actions">
+          ${finish ? '<button class="primary" data-action="dungeon-settle">结算副本</button>' : '<button class="primary" data-action="dungeon-event">继续探索</button>'}
+        </div></section>`;
+      return;
+    }
+    // 战斗
+    dungeonSession.idx++;
+    const finish = d.finished;
+    $('#view').innerHTML = `
+      <div class="page-title"><h2>副本 · 第 ${dungeonSession.chapter} 章</h2><p class="muted">战斗 · ${esc(d.monster)}</p></div>
+      <section class="panel glass">${renderEventTrack(dungeonSession.events, dungeonSession.idx)}</section>
+      ${renderBattleResult(d, false)}
+      <section class="panel glass"><div class="dungeon-actions">
+        ${finish ? '<button class="primary" data-action="dungeon-settle">结算副本</button>' : '<button class="primary" data-action="dungeon-event">继续探索</button>'}
+      </div></section>`;
+  } catch (e) { toast(e.message, true); }
+}
+
+function renderEncounterResult(d) {
+  const lines = (d.log || []).map(x => `<li>${esc(x)}</li>`).join('');
+  return `<section class="panel glass">
+    <h3 class="panel-title">奇遇 · ${esc(d.encounter)}</h3>
+    <ul class="battle-log">${lines}</ul>
+    <div class="reward-line">
+      ${d.gold ? `<span class="r-gold">🪙 +${d.gold}</span>` : ''}
+      ${d.hp > 0 ? `<span class="r-hp">❤️ +${d.hp}</span>` : d.hp < 0 ? `<span class="r-hp-dmg">💔 ${d.hp}</span>` : ''}
+      ${(d.items || []).map(x => `<span class="r-item">📦 ${esc(x)}</span>`).join('')}
+    </div>
+  </section>`;
+}
+
+function renderBattleResult(d, failed) {
+  const lines = (d.log || []).map(x => `<li>${esc(x)}</li>`).join('');
+  const drops = (d.drops || []).map(x => `<span class="r-item">📦 ${esc(x.name)}（${QUALITY_CN[x.quality] || x.quality}）</span>`).join('');
+  return `<section class="panel glass">
+    <h3 class="panel-title">${failed ? '战败' : '战斗胜利'} · ${esc(d.monster)}${d.tier ? `（${d.tier === 'boss' ? 'Boss' : d.tier === 'elite' ? '精英' : '普通'}）` : ''}</h3>
+    <ul class="battle-log">${lines}</ul>
+    ${failed ? `<div class="reward-line"><span class="r-loss">🪙 -${d.gold_loss} 金币</span></div>` : `
+    <div class="reward-line">
+      <span class="r-exp">✨ 经验 +${d.exp}</span>
+      <span class="r-gold">🪙 +${d.gold}</span>
+      ${drops}
+    </div>
+    ${d.level ? `<p class="muted">等级提升至 Lv.${d.level}！当前生命 ${d.cur_hp}` : ''}`}
+  </section>`;
+}
+
+async function dungeonSettle() {
+  try {
+    const d = await api('/api/rpg/dungeon/settle', { method: 'POST' });
+    dungeonSession = null;
+    const battles = (d.battles || []).map(b => `
+      <div class="battle-card">
+        <div class="battle-head">事件 ${b.event} · ${esc(b.monster)} · ${b.win ? '✅ 胜' : '❌ 败'}</div>
+        <ul class="battle-log">${(b.log || []).map(x => `<li>${esc(x)}</li>`).join('')}</ul>
+      </div>`).join('');
+    const drops = (d.drops || []).map(x => `<span class="r-item">📦 ${esc(x.name)} ×${x.quantity || 1}（${QUALITY_CN[x.quality] || x.quality}）</span>`).join('');
+    $('#view').innerHTML = `
+      <div class="page-title"><h2>副本结算</h2><p class="muted">第 ${d.chapter} 章</p></div>
+      <section class="panel glass">
+        <h3 class="panel-title">总览</h3>
+        <div class="attr-grid">
+          <div class="attr-cell"><span>事件完成</span><b>${d.completed_events} / ${d.total_events}</b></div>
+          <div class="attr-cell"><span>Boss</span><b>${d.boss_killed ? '✅ 已击败' : '—'}</b></div>
+          <div class="attr-cell"><span>结果</span><b>${d.failed ? '❌ 失败' : '✅ 通关'}</b></div>
+          <div class="attr-cell"><span>药水使用</span><b>${d.potions_used} 瓶</b></div>
+        </div>
+        <div class="reward-line">
+          <span class="r-exp">✨ 经验 +${d.exp}</span>
+          <span class="r-gold">🪙 +${d.gold}</span>
+          ${drops}
+        </div>
+        ${d.old_map_used ? '<p class="muted">使用了「猎人旧地图」，本局 Boss 出现率提升。</p>' : ''}
+      </section>
+      <section class="panel glass"><h3 class="panel-title">战斗战报</h3>${battles || '<p class="empty-tip">本局没有战斗记录</p>'}</section>
+      <div class="dungeon-actions"><button class="primary" data-action="nav" data-view="dungeon">返回副本</button></div>`;
+    rpg.dungeon = null;
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ================================================================
+ * RPG —— 铁匠铺页
+ * ================================================================ */
+async function viewForge() {
+  setNav('forge');
+  $('#view').innerHTML = '<p class="empty-tip">加载中…</p>';
+  try {
+    const cat = await api('/api/rpg/forge/catalog');
+    rpg.forge = cat;
+    $('#view').innerHTML = `
+      <div class="page-title"><h2>铁匠铺</h2><p class="muted">合成材料、制作药水与装备</p></div>
+      <div class="tabs" id="forgeTabs">
+        <button data-action="forge-tab" data-tab="material">材料合成</button>
+        <button data-action="forge-tab" data-tab="potion">药水制作</button>
+        <button data-action="forge-tab" data-tab="equip1">一章装备</button>
+        <button data-action="forge-tab" data-tab="equip2">二章装备</button>
+      </div>
+      <div id="forgeList"></div>`;
+    renderForgeList();
+  } catch (e) { toast(e.message, true); $('#view').innerHTML = '<p class="empty-tip">加载失败</p>'; }
+}
+
+function renderForgeList() {
+  $$('#forgeTabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === currentForgeTab));
+  const cat = rpg.forge;
+  if (!cat) return;
+  const wrap = $('#forgeList');
+  let kind = 'material', list = [], title = '材料合成';
+  if (currentForgeTab === 'material') { kind = 'material'; list = cat.material || []; title = '材料合成'; }
+  else if (currentForgeTab === 'potion') { kind = 'potion'; list = cat.potion || []; title = '药水制作'; }
+  else if (currentForgeTab === 'equip1') { kind = 'equip'; list = cat.equip_1 || []; title = '第一章装备（普通）'; }
+  else { kind = 'equip'; list = cat.equip_2 || []; title = '第二章装备（优良）'; }
+  if (!list.length) { wrap.innerHTML = '<p class="empty-tip">暂无配方</p>'; return; }
+  wrap.innerHTML = `<h3 class="panel-title">${title}</h3><div class="forge-list">
+    ${list.map(it => `
+      <div class="forge-row glass">
+        <div class="forge-name">${esc(it.name)} ${it.quality ? qualityBadge(it.quality) : ''}</div>
+        <div class="forge-cost">🪙 ${it.cost}</div>
+        <div class="forge-ing">${Object.entries(it.ingredients || {}).map(([m, q]) => `${esc(m)} ×${q}`).join(' + ')}</div>
+        <button class="primary sm" data-action="forge" data-kind="${kind}" data-name="${esc(it.name)}">制作</button>
+      </div>`).join('')}
+  </div>`;
+}
+
+async function forgeItem(kind, name) {
+  const path = kind === 'material' ? '/api/rpg/forge/material' : kind === 'potion' ? '/api/rpg/forge/potion' : '/api/rpg/forge/equip';
+  try {
+    const d = await api(path, { method: 'POST', body: { recipe: name } });
+    rpg.gold = d.gold;
+    updateGold();
+    toast(`制作成功：${d.name}${d.quantity ? ' ×' + d.quantity : ''}`);
+    viewForge();
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ================================================================
+ * RPG —— 商店页
+ * ================================================================ */
+async function viewShop() {
+  setNav('shop');
+  $('#view').innerHTML = '<p class="empty-tip">加载中…</p>';
+  try {
+    const d = await api('/api/rpg/shop/items');
+    rpg.shop = d.items || [];
+    try { const b = await api('/api/rpg/character'); rpg.gold = b.character.gold; } catch {}
+    updateGold();
+    $('#view').innerHTML = `
+      <div class="page-title"><h2>商店</h2><p class="muted">🪙 ${rpg.gold} 金币</p></div>
+      <div class="shop-grid">
+        ${rpg.shop.map(it => `
+          <div class="shop-card glass">
+            <div class="shop-ico">${it.type === 'equip_box' ? '🎁' : TYPE_ICO[it.type] || '📦'}</div>
+            <div class="shop-name">${esc(it.name)}</div>
+            <div class="shop-type muted">${it.type === 'equip_box' ? '装备箱' : TYPE_CN[it.type] || it.type}</div>
+            ${it.stats && Object.keys(it.stats).length ? `<div class="shop-stats">${statsText(it.stats)}</div>` : ''}
+            <div class="shop-buy-row">
+              <input type="number" class="qty" value="1" min="1" max="99" id="qty-${esc(it.name)}">
+              <button class="primary sm" data-action="shop-buy" data-name="${esc(it.name)}">🪙 ${it.price} 购买</button>
+            </div>
+          </div>`).join('')}
+      </div>`;
+  } catch (e) { toast(e.message, true); $('#view').innerHTML = '<p class="empty-tip">加载失败</p>'; }
+}
+
+async function shopBuy(name) {
+  const qtyEl = $('#qty-' + name);
+  const quantity = qtyEl ? Math.max(1, Math.min(99, Number(qtyEl.value) || 1)) : 1;
+  try {
+    const d = await api('/api/rpg/shop/buy', { method: 'POST', body: { item: name, quantity } });
+    rpg.gold = d.gold;
+    updateGold();
+    toast(`购买成功：${d.name}${d.box ? '（' + (QUALITY_CN[d.quality] || d.quality) + '）' : ' ×' + d.quantity}`);
+    viewShop();
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ================================================================
+ * 会话 / 启动
+ * ================================================================ */
+function updateGold() {
+  const p = $('#goldPill');
+  if (p) p.innerHTML = `🪙 <b>${rpg.gold ?? 0}</b> 金币`;
+}
+
+function renderShellUser() {
+  renderSideAccount();
+}
+
+async function logout() {
+  try { await api('/api/logout', { method: 'POST' }); } catch {}
+  if (ws) { try { ws.close(); } catch {} ws = null; }
+  ME = null;
+  rpg = { char: null, gold: 0, backpack: null, dungeon: null, forge: null, shop: null };
+  dungeonSession = null;
+  $('#shell').classList.add('hidden');
+  $('#authView').classList.remove('hidden');
+  renderAuth();
+  toast('已退出登录');
+}
+
+function enterShell() {
+  $('#authView').classList.add('hidden');
+  $('#shell').classList.remove('hidden');
+  renderShellUser();
+  viewCharacter();
+  connectChat();
+}
+
+function bindShell() {
+  $('#logoutBtn').onclick = logout;
+  $('#menuBtn').onclick = () => {
+    $('.sidebar').classList.add('open');
+    $('#sideMask').classList.add('open');
+  };
+  $('#sideMask').onclick = () => {
+    $('.sidebar').classList.remove('open');
+    $('#sideMask').classList.remove('open');
+  };
+  // 窗口大小变化时聊天室默认状态
+  const mq = window.matchMedia('(min-width: 1025px)');
+  mq.addEventListener('change', e => {
+    if (e.matches) setChatOpen(true);
+    else setChatOpen(false);
+  });
+}
+
+function boot() {
+  const navDefs = [
+    ['character', '⚔️', '角色'], ['backpack', '🎒', '背包'], ['dungeon', '🗺️', '副本'],
+    ['forge', '🔨', '铁匠铺'], ['shop', '🛒', '商店']
+  ];
+  const bn = $('#bottomNav');
+  if (bn && !bn.children.length) {
+    bn.innerHTML = navDefs.map(([v, ic, t]) => `<button data-view="${v}" data-action="nav"><span class="nav-ico">${ic}</span>${t}</button>`).join('');
+  }
+  renderAuth();
+  bindShell();
+  bindChat();
+  api('/api/me').then(d => {
+    ME = d.user || d;
+    enterShell();
+  }).catch(() => {
+    $('#authView').classList.remove('hidden');
+  });
+}
+
+document.addEventListener('DOMContentLoaded', boot);

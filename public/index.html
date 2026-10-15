@@ -40,15 +40,11 @@
       </div>
     </div>
     <nav class="side-nav" id="sideNav">
-      <button data-view="home" class="active"><span class="nav-ico">🔥</span>首页</button>
-      <button data-view="topics"><span class="nav-ico">💬</span>最近的讨论</button>
-      <button data-view="games"><span class="nav-ico">🎮</span>发现游戏</button>
-      <button data-view="creations"><span class="nav-ico">🎨</span>玩家创作</button>
-      <button data-view="events"><span class="nav-ico">📅</span>活动日历</button>
-      <button data-view="resources"><span class="nav-ico">📦</span>资源分享</button>
-      <button data-view="favorites"><span class="nav-ico">⭐</span>我的收藏</button>
-      <button data-view="notifications"><span class="nav-ico">🔔</span>消息通知<span class="badge hidden" id="notifBadge"></span></button>
-      <button data-view="profile"><span class="nav-ico">👤</span>个人资料</button>
+      <button data-view="character" class="active"><span class="nav-ico">⚔️</span>角色</button>
+      <button data-view="backpack"><span class="nav-ico">🎒</span>背包</button>
+      <button data-view="dungeon"><span class="nav-ico">🗺️</span>副本</button>
+      <button data-view="forge"><span class="nav-ico">🔨</span>铁匠铺</button>
+      <button data-view="shop"><span class="nav-ico">🛒</span>商店</button>
     </nav>
     <div class="side-foot">
       <div id="sideAccount"></div>
@@ -67,11 +63,7 @@
         </div>
       </div>
       <div class="top-actions">
-        <div class="search-box">
-          <span class="search-ico">⌕</span>
-          <input id="searchInput" type="text" placeholder="搜索话题、游戏或用户...">
-        </div>
-        <button class="primary" id="newTopicBtn">✎ 发起话题</button>
+        <div class="gold-pill" id="goldPill">🪙 <b>0</b> 金币</div>
       </div>
     </header>
     <main class="content" id="view"></main>
@@ -93,16 +85,17 @@
       <input id="chatInput" type="text" placeholder="聊点什么吧..." maxlength="2000" autocomplete="off">
       <button class="send-btn" id="chatSend" title="发送">➤</button>
     </div>
-    <div class="chat-event glass">
-      <div class="event-inner">
-        <span class="event-tag">社区活动</span>
-        <span id="eventTitle">周末游戏之夜</span>
-        <span class="event-time" id="eventTime">--</span>
-        <button class="mini-btn" id="eventJoinBtn">我要参加</button>
-      </div>
-    </div>
   </aside>
 </div>
+
+<!-- ===== 底部导航（小屏） ===== -->
+<nav class="bottom-nav glass" id="bottomNav">
+  <button data-view="character" class="active"><span class="bn-ico">⚔️</span><span>角色</span></button>
+  <button data-view="backpack"><span class="bn-ico">🎒</span><span>背包</span></button>
+  <button data-view="dungeon"><span class="bn-ico">🗺️</span><span>副本</span></button>
+  <button data-view="forge"><span class="bn-ico">🔨</span><span>铁匠铺</span></button>
+  <button data-view="shop"><span class="bn-ico">🛒</span><span>商店</span></button>
+</nav>
 
 <div id="toast"></div>
 <div id="modalRoot"></div>

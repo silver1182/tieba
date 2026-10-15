@@ -25,6 +25,13 @@ AIGC:
    - 称号由自由输入改为预设池选择佩戴（`AVAILABLE_TITLES` + `.title-picks`）。
    - 头像颜色改为多排纯色块 + 「自动」按钮（`.color-pick.auto`，色块 `border-radius:8px`，移除渐变色盘）。
 
+3. **前端 RPG 阶段4 —— 5 页底部导航与论坛清理**
+   - `index.html` 重构：保留登录/注册（邀请码门槛）、个人资料、实时聊天；移除论坛发帖/回复/点赞/收藏/活动/通知/游戏页；`<nav id="bottomNav">` 为空壳，由 `app.js` boot() 注入 5 个 `data-view` 按钮（character/backpack/dungeon/forge/shop）。
+   - `app.js` 重构：5 视图 + document 事件委托；登录/注册后调 `/api/me` 取 user；WS 消息按 `{type:'presence'|'message', payload}` 处理、发送用 `ws.send(JSON.stringify({body}))`；副本事件渲染 `choices` 按钮（`data-choice`）并回传选择；底部导航注入与 boot 填充。
+   - `style.css` 追加 RPG 样式：角色面板/装备栏、背包四类分页、副本事件/战报、铁匠铺/商店卡片、`.event-choices/.choice` 与底部导航响应式媒体查询。
+   - 修正协议偏差：登录取 `/api/me`、WS 用 `ws.send`、奇遇选项渲染、底部导航 JS 注入、boot 填充 bottomNav。
+   - 自测：临时实例与干净库实例跑 `phase4_smoke.mjs` 全绿（20/20 通过），覆盖静态资源/认证/角色背包装备/副本全流程/铁匠铺/商店/自动战斗设置/WS 聊天。
+
 ### 后端 RPG 阶段1
 
 1. **player / items 表迁移**
@@ -82,7 +89,7 @@ AIGC:
 
 ### 备注
 
-- 阶段2、阶段3 均已本地实现并通过 E2E 自测（阶段3 自测 27/27 通过），尚未部署到线上服务器；阶段4（前端重构）与阶段5（部署上线）待做，详见 `TODO.md`。
+- 阶段2、阶段3、阶段4 均已本地实现并通过 E2E 自测（阶段3 自测 27/27 通过、阶段4 自测 20/20 通过），尚未部署到线上服务器；阶段5（部署上线）待做，详见 `TODO.md`。
 
 ## v1.1.0 - 2026-10-14
 
