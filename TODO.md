@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: b3d9dfb1989d5de331291901cce023f8_b79ac5c9c8b011f18e0e52540064ee0f
+    ReservedCode1: CCiiVT6nyM90VN2QO0JQee0i0bC6tOAHhrDWHzaxhPTU90PArpCsqE1B+8+mcZGD0OctXKIw2p1HJC2aOWgNpSlv+tYDxWAGba55TTqyLBd5c958qsI122qwXyDtOC/px60l/tCg4WEitOyNHNTsTe737GOkyjMR6FeQLVxEYqvz+rkFguMAFGwULBo=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: b3d9dfb1989d5de331291901cce023f8_b79ac5c9c8b011f18e0e52540064ee0f
+    ReservedCode2: CCiiVT6nyM90VN2QO0JQee0i0bC6tOAHhrDWHzaxhPTU90PArpCsqE1B+8+mcZGD0OctXKIw2p1HJC2aOWgNpSlv+tYDxWAGba55TTqyLBd5c958qsI122qwXyDtOC/px60l/tCg4WEitOyNHNTsTe737GOkyjMR6FeQLVxEYqvz+rkFguMAFGwULBo=
+---
+
 # tieba 项目未完成任务清单
 
 > 项目定位：私人论坛 + 轻量冒险 RPG（Campfire Arcade · 篝火社区）。
@@ -28,12 +39,13 @@
 - [x] 副本页：章节/次数/事件/自动战斗设置/战报
 - [x] 论坛功能清理：移除发帖/回复/点赞/收藏/活动/通知/游戏页；保留登录注册（邀请码门槛）、个人资料、实时聊天
 
-## RPG 阶段5 —— 部署上线（未开始）
+## RPG 阶段5 —— 部署上线（部分完成：本地验收通过，待部署）
 
-- [ ] 本地自测验收（第一版完成标准）
-- [ ] 上传服务器并重启线上服务（当前线上版本落后于本地）
+- [x] 本地自测验收（第一版完成标准）
+- [ ] 上传服务器并重启线上服务（当前线上版本落后于本地；项目内无部署脚本/服务器地址/SSH 凭据，缺少部署信息未上线）
 
 ## 长期待办
 
 - [ ] **撤销已暴露的 GitHub PAT（`ghp_` 开头）**：该令牌已在对话中明文出现，应立即在 GitHub 撤销并轮换
 - [ ] 邀请码管理前端界面（当前仅后端接口 + 命令行/API 使用）
+*（内容由AI生成，仅供参考）*

@@ -2,12 +2,14 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: b3d9dfb1989d5de331291901cce023f8_ab18b1edc7e911f18569525400638852
-    ReservedCode1: q5H+W1yuUIywtYNQTYwzaj4s013IyyH/ZEB1p1JyJIWs3ASJshDilYHs/63Jezn494RfK3MRvSdtE8KIOZkIoRCYa9j+cT1GMYNz+4G6v2ookoxa8UieME+9JbuEozHi2LgLydiNmsUiN/Lu7hbKdPmeiPJjBXxDHb9vzg0WGWFV+kozXMvvmY+QC3E=
+    ProduceID: b3d9dfb1989d5de331291901cce023f8_b874bb6cc8b011f18e0e52540064ee0f
+    ReservedCode1: GoyiQtSxruh7+9jBO7yxn/LiNm3JC6R23vj9G9dPte1H1MxAvGw8W9aByFUW+3N9fRf6rf/TfTfZ2yfVM4tdTlMn23IEsodTwZ6cmR8km8j3GtwAf91kTIfoKUn78QwDY60YBvyzVAkkBgIOpyCEgbnIc/MGNR6z0uKgUgbUXMWh1R42DtsJOMJq2WY=
     ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: b3d9dfb1989d5de331291901cce023f8_ab18b1edc7e911f18569525400638852
-    ReservedCode2: q5H+W1yuUIywtYNQTYwzaj4s013IyyH/ZEB1p1JyJIWs3ASJshDilYHs/63Jezn494RfK3MRvSdtE8KIOZkIoRCYa9j+cT1GMYNz+4G6v2ookoxa8UieME+9JbuEozHi2LgLydiNmsUiN/Lu7hbKdPmeiPJjBXxDHb9vzg0WGWFV+kozXMvvmY+QC3E=
+    PropagateID: b3d9dfb1989d5de331291901cce023f8_b874bb6cc8b011f18e0e52540064ee0f
+    ReservedCode2: GoyiQtSxruh7+9jBO7yxn/LiNm3JC6R23vj9G9dPte1H1MxAvGw8W9aByFUW+3N9fRf6rf/TfTfZ2yfVM4tdTlMn23IEsodTwZ6cmR8km8j3GtwAf91kTIfoKUn78QwDY60YBvyzVAkkBgIOpyCEgbnIc/MGNR6z0uKgUgbUXMWh1R42DtsJOMJq2WY=
 ---
+
+
 
 # CHANGELOG
 
@@ -87,9 +89,22 @@ AIGC:
    - 5 种怪物（黑铁守卫/黑雾祭司/毒牙巨蜥/溺亡水鬼/矿坑领主莫拉克 Boss）+ 3 种奇遇（地底商人可选购/黑雾祭坛/被困矿工）+ 第二章装备/材料掉落池。
    - Boss 击杀累计 `boss_kills_ch2`。
 
+### 后端/前端 RPG 阶段5 —— 本地第一版验收（通过）
+
+- 按第一版完成标准跑全链路验收（独立临时 DATA_DIR + 端口 3457 干净实例，`phase5_acceptance.mjs`）：
+  - 邀请码门槛注册、4 种族角色创建与种族修正（人族生命/精灵暴击防御/矮人防御减暴击/魔族攻击）、重复建角拦截；
+  - 背包四类结构、三栏装备（weapon/armor/accessory）装备/卸下回背包；
+  - 副本：每日 5 次（第 6 次被拒）、第一章完整副本（战斗+奇遇+结算、自动战斗回合日志、Boss 击杀计入 `boss_kills_ch1`）、战斗升级、等级封顶 6、中途结算、自动战斗设置保存与回显；
+  - 第二章副本：解锁条件校验（level≥3 且 `boss_kills_ch1≥1`，未达标 403 拦截）、完整通关、Boss 击杀计数 `boss_kills_ch2`、地底商人奇遇存在；
+  - 铁匠铺：材料合成/药水制作/一章二章装备制作（含 fine 品质）、未知配方与材料不足拦截；
+  - 商店：药水/材料/装备箱购买；交易行：挂单/列表/成交（10% 手续费、买卖双方结算）/取消/已装备不可挂单/不能买自己挂单；
+  - WS 实时聊天收发与在线广播。
+- 验收结果：**68/68 全部通过**。
+- 部署状态：项目内**无部署脚本、服务器地址、SSH 凭据、README 部署说明**，线上部署未执行，缺少部署信息详见 `TODO.md`。
+
 ### 备注
 
-- 阶段2、阶段3、阶段4 均已本地实现并通过 E2E 自测（阶段3 自测 27/27 通过、阶段4 自测 20/20 通过），尚未部署到线上服务器；阶段5（部署上线）待做，详见 `TODO.md`。
+- 阶段2、阶段3、阶段4、阶段5（本地验收）均已本地实现并通过 E2E 自测（阶段3 自测 27/27、阶段4 自测 20/20、阶段5 本地验收 68/68），尚未部署到线上服务器；阶段5 剩余「上传服务器并重启线上服务」待部署信息补齐后执行，详见 `TODO.md`。
 
 ## v1.1.0 - 2026-10-14
 
@@ -145,4 +160,5 @@ AIGC:
 
 - `server.mjs` 与 `public/app.js` 均通过 `node --check` 语法校验；CSS 括号平衡检查通过。
 - `uploads/` 目录由服务启动时自动创建。
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
