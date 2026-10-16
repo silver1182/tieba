@@ -541,7 +541,7 @@ textarea.uploading{border-color:var(--mint)!important;opacity:.8}
 
 /* ---- 属性强调色（反馈第1条） ---- */
 .st-atk{color:#ff9f6b}.st-def{color:#79b8ff}.st-hp{color:#ff8a8a}.st-crit{color:#ffd166}.st-critd{color:#ff7ac2}.st-gold{color:#ffd36b}.st-other{color:var(--muted)}
-.v-atk{color:#ff9f6b}.v-def{color:#79b8ff}.v-crit{color:#ffd166}.v-critd{color:#ff7ac2}.v-gold{color:#ffd36b}
+.attr-cell b.v-atk{color:#ff9f6b}.attr-cell b.v-def{color:#79b8ff}.attr-cell b.v-crit{color:#ffd166}.attr-cell b.v-critd{color:#ff7ac2}.attr-cell b.v-gold{color:#ffd36b}.hp-row span.v-hp{color:#ff8a8a}
 
 /* ---- 副本详情弹窗（反馈第5条） ---- */
 .chapter-card{position:relative}

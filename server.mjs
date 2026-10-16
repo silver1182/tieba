@@ -15,7 +15,7 @@ mkdirSync(uploads, { recursive: true });
 const db = new DatabaseSync(resolve(data, 'forum.sqlite'));
 db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,username TEXT NOT NULL COLLATE NOCASE UNIQUE,password TEXT NOT NULL,role TEXT NOT NULL DEFAULT 'user',disabled INTEGER DEFAULT 0,created INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user_id INTEGER REFERENCES users(id),expires INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user_id INTEGER REFERENCES users(id),expires INTEGER NOT NULL,ua TEXT DEFAULT '',created_at INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS invites(id INTEGER PRIMARY KEY,hash TEXT UNIQUE NOT NULL,expires INTEGER NOT NULL,used_by INTEGER REFERENCES users(id),revoked INTEGER DEFAULT 0,created INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS topics(id INTEGER PRIMARY KEY,user_id INTEGER REFERENCES users(id),title TEXT NOT NULL,body TEXT NOT NULL,category TEXT NOT NULL,created INTEGER NOT NULL,pinned INTEGER DEFAULT 0,closed INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS replies(id INTEGER PRIMARY KEY,topic_id INTEGER REFERENCES topics(id) ON DELETE CASCADE,user_id INTEGER REFERENCES users(id),body TEXT NOT NULL,created INTEGER NOT NULL);
@@ -38,6 +38,11 @@ const ensureCol = (name, ddl) => { if(!usersCols.includes(name)) db.exec('ALTER 
 ensureCol('display_name', "display_name TEXT DEFAULT ''");
 ensureCol('avatar_color', "avatar_color TEXT DEFAULT ''");
 ensureCol('title', "title TEXT DEFAULT ''");
+/* ---------- 数据库迁移（sessions 表补充 ua/created_at，兼容已有行） ---------- */
+const sessionCols = db.prepare('PRAGMA table_info(sessions)').all().map(c => c.name);
+const ensureSessionCol = (name, ddl) => { if(!sessionCols.includes(name)) db.exec('ALTER TABLE sessions ADD COLUMN ' + ddl); };
+ensureSessionCol('ua', "ua TEXT DEFAULT ''");
+ensureSessionCol('created_at', "created_at INTEGER DEFAULT 0");
 
 /* ========== RPG 数据迁移（player / items 表） ========== */
 db.exec(`
@@ -244,7 +249,7 @@ function computeStats(p, items){
   const maxHp = p.max_hp + (race.max_hp || 0) + sum('max_hp');
   return {
     user_id: p.user_id, race: p.race, level: p.level, exp: p.exp,
-    gold: p.gold, max_hp: maxHp, cur_hp: Math.min(p.cur_hp, maxHp),
+    gold: p.gold, max_hp: maxHp, cur_hp: p.cur_hp <= 0 ? maxHp : Math.min(p.cur_hp, maxHp),
     attack: p.attack + (race.attack || 0) + sum('attack'),
     defense: p.defense + (race.defense || 0) + sum('defense'),
     crit_rate: p.crit_rate + (race.crit_rate || 0) + sum('crit_rate'),
@@ -265,6 +270,14 @@ function buildCharacter(userId){
   const p = getPlayer(userId);
   if(!p) return null;
   const items = getPlayerItems(userId);
+  /* 血量兜底：非副本战斗中的角色若 cur_hp<=0（历史脏数据/中断异常），读取时按满血恢复并写库，保证面板永不显示 0 血 */
+  if(p.cur_hp <= 0 && !dungeonSessions.has(userId)){
+    const s0 = computeStats(p, items);
+    if(p.cur_hp !== s0.max_hp){
+      p.cur_hp = s0.max_hp;
+      stmt('UPDATE player SET cur_hp=? WHERE user_id=?', s0.max_hp, userId);
+    }
+  }
   const s = computeStats(p, items);
   const equipped = items.filter(it => it.location.startsWith('equipped_')).map(it => ({ id:it.id, name:it.name, type:it.type, quality:it.quality, stats:it.stats, location:it.location }));
   return { ...s, equipped };
@@ -353,9 +366,12 @@ async function body(req, maxBytes = 32768){
   }
   try { return JSON.parse(result || '{}'); } catch { throw Error('请求格式不正确'); }
 }
-function session(res, id){
+function session(req, res, id){
   const token = randomBytes(32).toString('hex');
-  stmt('INSERT INTO sessions VALUES(?,?,?)', hash(token), id, now() + 7 * 86400000);
+  /* 单会话模式：同一账号登录/注册成功时踢掉其他旧会话 */
+  stmt('DELETE FROM sessions WHERE user_id=?', id);
+  stmt('INSERT INTO sessions(token,user_id,expires,ua,created_at) VALUES(?,?,?,?,?)', hash(token), id, now() + 7 * 86400000, String(req.headers['user-agent'] || '').slice(0, 200), now());
+  eject(id);
   return { 'Set-Cookie': `session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800${process.env.NODE_ENV === 'production' ? '; Secure' : ''}` };
 }
 function addNotification(userId, type, refId, bodyText){
@@ -429,14 +445,18 @@ const server = http.createServer(async (req, res) => {
     if(method !== 'GET' && !originOK(req)) return out(res, 403, { error: '请求来源不允许' });
     const u = user(req);
 
-    if(path === '/api/me' && method === 'GET') return out(res, 200, { user: u || null, setup: !get('SELECT id FROM users WHERE role=?', 'admin') && local(req) });
+    if(path === '/api/me' && method === 'GET'){
+      const setup = !get('SELECT id FROM users WHERE role=?', 'admin') && local(req);
+      if(!u) return out(res, 401, { error: '未登录', setup });
+      return out(res, 200, { user: u, setup });
+    }
 
     if(path === '/api/setup' && method === 'POST'){
       if(!local(req) || get('SELECT id FROM users WHERE role=?', 'admin')) return out(res, 403, { error: '初始化入口已关闭' });
       const b = await body(req);
       validCredentials('baiwan', b.password);
       const r = stmt('INSERT INTO users(username,password,role,created) VALUES(?,?,?,?)', 'baiwan', password(b.password), 'admin', now());
-      return out(res, 201, { ok: true }, session(res, Number(r.lastInsertRowid)));
+      return out(res, 201, { ok: true }, session(req, res, Number(r.lastInsertRowid)));
     }
 
     if(['/api/login', '/api/register'].includes(path) && method === 'POST'){
@@ -446,7 +466,7 @@ const server = http.createServer(async (req, res) => {
       if(path.endsWith('login')){
         const found = get('SELECT * FROM users WHERE username=?', b.username);
         if(!found || found.disabled || !verify(b.password, found.password)) return out(res, 401, { error: '账号或密码不正确' });
-        return out(res, 200, { ok: true }, session(res, found.id));
+        return out(res, 200, { ok: true }, session(req, res, found.id));
       }
       if(!get('SELECT id FROM users WHERE role=?', 'admin')) return out(res, 403, { error: '管理员尚未初始化' });
       db.exec('BEGIN IMMEDIATE');
@@ -457,11 +477,29 @@ const server = http.createServer(async (req, res) => {
         const r = stmt('INSERT INTO users(username,password,created) VALUES(?,?,?)', b.username, password(b.password), now());
         stmt('UPDATE invites SET used_by=? WHERE id=?', Number(r.lastInsertRowid), invite.id);
         db.exec('COMMIT');
-        return out(res, 201, { ok: true }, session(res, Number(r.lastInsertRowid)));
+        return out(res, 201, { ok: true }, session(req, res, Number(r.lastInsertRowid)));
       } catch(e){ db.exec('ROLLBACK'); throw e; }
     }
 
     if(!u) return out(res, 401, { error: '请先登录' });
+
+    /* ========== 会话管理（第 1 节：列会话 / 踢除会话） ========== */
+    if(path === '/api/sessions' && method === 'GET'){
+      const cur = hash(cookie(req) || '');
+      const rows = all('SELECT token,expires,ua,created_at FROM sessions WHERE user_id=? ORDER BY created_at DESC', u.id);
+      return out(res, 200, { sessions: rows.map(r => ({ id: r.token.slice(0, 8), current: r.token === cur, expires: r.expires, ua: r.ua || '', created_at: r.created_at || 0 })) });
+    }
+    if(path === '/api/sessions/kick' && method === 'POST'){
+      const b = await body(req);
+      const id = String(b.id || '').slice(0, 8);
+      const cur = hash(cookie(req) || '');
+      const rows = all('SELECT token FROM sessions WHERE user_id=?', u.id);
+      const target = rows.find(r => r.token.startsWith(id));
+      if(!target) return out(res, 404, { error: '会话不存在' });
+      if(target.token === cur) return out(res, 400, { error: '不能踢除当前会话' });
+      stmt('DELETE FROM sessions WHERE token=?', target.token);
+      return out(res, 200, { ok: true });
+    }
 
     /* ========== RPG 接口（第 2、8 节） ========== */
     if(path === '/api/rpg/character/create' && method === 'POST'){
@@ -601,7 +639,13 @@ function applyExpAndLevel(playerRow, expGain){
     playerRow.defense += LEVEL_UP_GROWTH.defense;
     ups++;
   }
-  stmt('UPDATE player SET exp=?, level=?, max_hp=?, attack=?, defense=? WHERE user_id=?', exp, level, playerRow.max_hp, playerRow.attack, playerRow.defense, playerRow.user_id);
+  let curHp = playerRow.cur_hp;
+  if(ups > 0){
+    // 升级立即回满血（含装备/种族加成的满血），写库保证面板与后续战斗按满血继续
+    curHp = computeStats(playerRow, getPlayerItems(playerRow.user_id)).max_hp;
+    playerRow.cur_hp = curHp;
+  }
+  stmt('UPDATE player SET exp=?, level=?, max_hp=?, attack=?, defense=?, cur_hp=? WHERE user_id=?', exp, level, playerRow.max_hp, playerRow.attack, playerRow.defense, curHp, playerRow.user_id);
   playerRow.level = level; playerRow.exp = exp;
   return ups;
 }
@@ -740,6 +784,7 @@ function simulateBattle(playerRow, monsterKey, opts){
       pb.defDownT = monster.armor_break_dur;
       log.push('敌人破甲，你的防御降低 ' + monster.armor_break_amt + ' 点');
     }
+    traceHp();
   }
   traceHp();
   const win = m.hp <= 0;
@@ -925,7 +970,7 @@ async function handleDungeonEvent(req, res, u){
       const rewards = grantBattleRewards(p, ev.monster, ev.tier, cfg);
       cfg.bossBoost = 0;
       s.exp += rewards.exp; s.gold += rewards.gold; s.drops.push(...rewards.drops);
-      applyExpAndLevel(p, rewards.exp);
+      const ups = applyExpAndLevel(p, rewards.exp);
       p.gold += rewards.gold;
       stmt('UPDATE player SET gold=? WHERE user_id=?', p.gold, u.id);
       if(ev.tier === 'boss'){
@@ -940,7 +985,7 @@ async function handleDungeonEvent(req, res, u){
       }
       s.idx++;
       const done = s.idx >= s.events.length;
-      return out(res, 200, { ok: true, win: true, monster: ev.monster, tier: ev.tier, exp: rewards.exp, gold: rewards.gold, drops: rewards.drops, healUsed: battle.healUsed, cur_hp: p.cur_hp, level: p.level, log: battle.log, hpTrace: battle.hpTrace, playerName: u.display_name || u.username, remaining_events: s.events.length - s.idx, finished: done });
+      return out(res, 200, { ok: true, win: true, monster: ev.monster, tier: ev.tier, exp: rewards.exp, gold: rewards.gold, drops: rewards.drops, healUsed: battle.healUsed, cur_hp: ups > 0 ? p.cur_hp : battle.curHp, level: p.level, log: battle.log, hpTrace: battle.hpTrace, playerName: u.display_name || u.username, remaining_events: s.events.length - s.idx, finished: done });
     }
     const lossRate = raceFailGoldLoss(p.race);
     const loss = Math.floor(p.gold * lossRate);

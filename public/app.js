@@ -29,6 +29,11 @@ async function api(path, opts = {}) {
   });
   let data = null;
   try { data = await res.json(); } catch { data = {}; }
+  /* 未登录/会话失效统一处理：登录、注册、me 除外（它们各自有自己的 401 语义） */
+  if (res.status === 401 && !/\/api\/(login|register|me)(\/|$)/.test(path)) {
+    showAuth();
+    throw new Error(data.error || '登录已失效，请重新登录');
+  }
   if (!res.ok) throw new Error(data.error || ('请求失败（' + res.status + '）'));
   return data;
 }
@@ -102,10 +107,13 @@ const MONSTER_EMOJI = {
 function statsText(stats) {
   if (!stats) return '';
   return Object.entries(stats).map(([k, v]) => {
+    const n = Number(v);
+    if (!n) return ''; // 数值为 0 不显示该条，避免无意义噪声
     const label = STAT_CN[k] || k;
     const pct = PCT_KEYS.includes(k) && k !== 'death_save';
-    return `<span class="${STAT_COLOR[k] || 'st-other'}">${label} +${v}${pct ? '%' : ''}</span>`;
-  }).join(' · ');
+    const sign = n > 0 ? '+' : '-';
+    return `<span class="${STAT_COLOR[k] || 'st-other'}">${label} ${sign}${Math.abs(n)}${pct ? '%' : ''}</span>`;
+  }).filter(Boolean).join(' · ');
 }
 function qualityBadge(q) { return `<span class="q-badge ${QUALITY_CLASS[q] || 'q-normal'}">${QUALITY_CN[q] || q}</span>`; }
 
@@ -152,6 +160,8 @@ document.addEventListener('click', async e => {
   else if (a === 'close-modal') closeModal();
   else if (a === 'edit-profile') openEditProfile();
   else if (a === 'change-password') openChangePassword();
+  else if (a === 'manage-sessions') openSessionsModal();
+  else if (a === 'kick-session') kickSession(el.dataset.id);
 });
 
 /* ================================================================
@@ -213,8 +223,9 @@ async function doLogin() {
   const password = $('#loginPass').value;
   if (!username || !password) return toast('请输入账号和密码', true);
   try {
-    const d = await api('/api/login', { method: 'POST', body: { username, password } });
-    ME = d.user;
+    await api('/api/login', { method: 'POST', body: { username, password } });
+    const me = await api('/api/me');
+    ME = me.user || me;
     enterShell();
     toast('欢迎回来，' + (ME.display_name || ME.username));
   } catch (e) { toast(e.message, true); }
@@ -334,6 +345,7 @@ async function viewProfile() {
         <div class="profile-actions">
           <button class="primary" data-action="edit-profile">编辑资料</button>
           <button class="ghost" data-action="change-password">修改密码</button>
+          <button class="ghost" data-action="manage-sessions">会话管理</button>
         </div>
       </div>
       ${rpgHtml}`;
@@ -390,6 +402,47 @@ function openChangePassword() {
       toast('密码已修改');
     } catch (e) { toast(e.message, true); }
   };
+}
+
+function deviceLabel(ua) {
+  if (!ua) return '未知设备';
+  const m = String(ua).match(/MicroMessenger|Edg\/\d+|Chrome\/\d+|Firefox\/\d+|Safari\/\d+|Windows|iPhone|Android|Macintosh/);
+  return m ? m[0].replace(/\d+$/, '') : String(ua).slice(0, 40);
+}
+
+async function openSessionsModal() {
+  openModal('<h3 class="modal-title">会话管理</h3><p class="form-tip">加载中…</p>');
+  try {
+    const d = await api('/api/sessions');
+    const list = d.sessions || [];
+    $('#modalRoot .modal').innerHTML = `
+      <h3 class="modal-title">登录设备 / 会话管理</h3>
+      <p class="form-tip">同一账号同时仅保留一个有效会话，新登录会自动踢除旧会话。</p>
+      <div class="session-list">
+        ${list.map(s => `
+          <div class="session-item glass">
+            <div class="session-info">
+              <b>${esc(deviceLabel(s.ua))}</b>${s.current ? ' <span class="q-badge q-fine">当前</span>' : ''}
+              <div class="muted">ID ${esc(s.id)} · 登录于 ${fmtDate(s.created_at)} ${fmtTime(s.created_at)} · 过期 ${fmtDate(s.expires)}</div>
+            </div>
+            ${s.current ? '' : `<button class="ghost sm" data-action="kick-session" data-id="${esc(s.id)}">踢除</button>`}
+          </div>`).join('') || '<p class="empty-tip">暂无会话记录</p>'}
+      </div>
+      <div class="modal-actions">
+        <button class="ghost" data-action="close-modal">关闭</button>
+      </div>`;
+  } catch (e) {
+    $('#modalRoot .modal').innerHTML = `<h3 class="modal-title">会话管理</h3><p class="empty-tip">加载失败：${esc(e.message)}</p><div class="modal-actions"><button class="ghost" data-action="close-modal">关闭</button></div>`;
+  }
+}
+
+async function kickSession(id) {
+  if (!id) return;
+  try {
+    await api('/api/sessions/kick', { method: 'POST', body: { id } });
+    toast('已踢除该会话');
+    openSessionsModal();
+  } catch (e) { toast(e.message, true); }
 }
 
 function renderSideAccount() {
@@ -473,7 +526,7 @@ function renderCharacter(c, st) {
         </div>
         <div class="gold-big">🪙 ${c.gold}</div>
       </div>
-      <div class="hp-row"><span>生命</span><div class="hp-bar"><i style="width:${hpPct}%"></i></div><span>${c.cur_hp} / ${c.max_hp}</span></div>
+      <div class="hp-row"><span>生命</span><div class="hp-bar"><i style="width:${hpPct}%"></i></div><span class="v-hp">${c.cur_hp} / ${c.max_hp}</span></div>
     </section>
 
     <section class="panel glass">
@@ -767,7 +820,10 @@ async function dungeonEvent(choice) {
       dungeonSession = null;
       updateGold();
       $('#view').innerHTML = renderBattleResult(d, true) + `
-        <section class="panel glass"><h3 class="panel-title">战败结算</h3><p class="muted">本次副本失败，损失 ${d.gold_loss} 金币（保留经验与普通材料）。</p></section>`;
+        <section class="panel glass"><h3 class="panel-title">战败结算</h3><p class="muted">本次副本失败，损失 ${d.gold_loss} 金币（保留经验与普通材料）。</p></section>
+        <section class="panel glass"><div class="dungeon-actions">
+          <button class="primary" data-action="dungeon-settle">结算副本</button>
+        </div></section>`;
       playBattleReplay(d);
       rpg.dungeon = { ...rpg.dungeon, in_dungeon: false };
       return;
@@ -1036,8 +1092,7 @@ function renderShellUser() {
   renderSideAccount();
 }
 
-async function logout() {
-  try { await api('/api/logout', { method: 'POST' }); } catch {}
+function showAuth() {
   if (ws) { try { ws.close(); } catch {} ws = null; }
   ME = null;
   rpg = { char: null, gold: 0, backpack: null, dungeon: null, forge: null, shop: null };
@@ -1045,6 +1100,11 @@ async function logout() {
   $('#shell').classList.add('hidden');
   $('#authView').classList.remove('hidden');
   renderAuth();
+}
+
+async function logout() {
+  try { await api('/api/logout', { method: 'POST' }); } catch {}
+  showAuth();
   toast('已退出登录');
 }
 
@@ -1087,10 +1147,11 @@ function boot() {
   bindShell();
   bindChat();
   api('/api/me').then(d => {
-    ME = d.user || d;
+    if (!d || !d.user) { showAuth(); return; }
+    ME = d.user;
     enterShell();
   }).catch(() => {
-    $('#authView').classList.remove('hidden');
+    showAuth();
   });
 }
 

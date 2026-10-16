@@ -19,6 +19,38 @@ AIGC:
 
 > 以下改动已部署到线上服务器（dontdie-ai.com，systemd + nginx HTTPS），尚未发布正式版本号。
 
+### 账号会话与副本战斗体验优化（2026-10-16）
+
+1. **账号系统三项修复**
+   - `/api/me` 未登录改为返回 401，前端统一拦截并弹出登录页（`api()` 统一处理 401 → `showAuth`）。
+   - 新增会话列表 / 踢除接口与界面：`GET /api/sessions`、`POST /api/sessions/kick`，前端 `openSessionsModal` / `kickSession` / `deviceLabel` 会话管理。
+   - 单会话模式：`session(req,res,id)` 单会话 + 写入 ua / created_at + 踢旧会话。
+
+2. **角色面板属性数值配色**
+   - 属性数值按类型着色：攻击橙、防御蓝、生命红、暴击黄、暴伤粉、金币金（`STAT_COLOR` 映射 + `statsText` 彩色 span）。
+   - 修复 CSS 选择器优先级导致配色未生效：角色面板走 `renderCharacter` 而非 `statsText`，补 `v-hp` 生命红（`.v-hp{color:#ff8a8a}`），属性数值带 `v-atk/v-def/v-crit/v-critd/v-gold/v-hp` 类。
+
+3. **副本战斗表现丰富**
+   - 战斗舞台：双方 emoji 形象 + 血条 + 技能 / 被动提示 + 攻击特效（`renderBattleResult` 战场舞台、`playBattleReplay` 逐行跳出 + 抖动动画）。
+   - 战斗日志 2 行 2 行逐步跳出，血条逐回合同步（`server.mjs` 战斗循环每轮 `traceHp` 采样，前端按 `hpTrace` 同步血条）。
+
+4. **副本选择界面掉落详情弹窗**
+   - `showDungeonInfo` 复用 `openModal`，展示副本掉落详情（`.chapter-info-btn` / `.drop-group`）。
+
+5. **装备属性符号统一**
+   - `statsText` 正数 `+N`、负数 `-N`、零不显示，消除符号歧义。
+
+6. **角色血量兜底**
+   - 非副本战斗 `cur_hp <= 0` 自动恢复满血（`computeStats` 兜底）。
+
+7. **副本失败结算按钮**
+   - 战败结算界面新增「结算副本」按钮（`dungeon-settle`，复用 `dungeonSettle()`），可正常退出。
+
+8. **副本中升级自动回满血**
+   - `applyExpAndLevel` 升级（ups>0）时 `cur_hp` 置为 `computeStats(...).max_hp` 写库；胜利响应升级时返回满血；失败响应已扣 `gold_loss`，settle 不再重复扣。
+
+- 校验：`node --check public/app.js`、`node --check server.mjs` 均通过。
+
 ### 前端
 
 1. **火焰标记去除**
