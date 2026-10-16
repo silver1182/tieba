@@ -91,13 +91,20 @@ const STAT_CN = {
 };
 const PCT_KEYS = ['crit_rate', 'crit_dmg', 'gold_bonus', 'heal_pct', 'beast_dmg_reduce', 'undead_dmg', 'high_hp_reduce', 'heal_pct_penalty'];
 
+const STAT_COLOR = {
+  max_hp: 'st-hp', attack: 'st-atk', defense: 'st-def',
+  crit_rate: 'st-crit', crit_dmg: 'st-critd', gold_bonus: 'st-gold'
+};
+const MONSTER_EMOJI = {
+  '灰牙野狼': '🐺', '腐木妖': '🌳', '林间盗匪': '🥷', '黑斑巨狼': '🐺', '灰烬狼王': '🐺👑',
+  '矿坑蝙蝠': '🦇', '黑铁傀儡': '🤖', '黑雾祭司': '🧙', '黑铁守卫': '🛡️', '矿坑领主莫拉克': '👹'
+};
 function statsText(stats) {
   if (!stats) return '';
   return Object.entries(stats).map(([k, v]) => {
     const label = STAT_CN[k] || k;
-    if (PCT_KEYS.includes(k) && k !== 'death_save') return `${label} +${v}%`;
-    if (k === 'death_save') return `${label} +${v}`;
-    return `${label} +${v}`;
+    const pct = PCT_KEYS.includes(k) && k !== 'death_save';
+    return `<span class="${STAT_COLOR[k] || 'st-other'}">${label} +${v}${pct ? '%' : ''}</span>`;
   }).join(' · ');
 }
 function qualityBadge(q) { return `<span class="q-badge ${QUALITY_CLASS[q] || 'q-normal'}">${QUALITY_CN[q] || q}</span>`; }
@@ -138,6 +145,7 @@ document.addEventListener('click', async e => {
   else if (a === 'dungeon-start') startDungeon();
   else if (a === 'dungeon-event') dungeonEvent(el.dataset.choice || '');
   else if (a === 'dungeon-settle') dungeonSettle();
+  else if (a === 'dungeon-info') showDungeonInfo(el.dataset.chapter);
   else if (a === 'save-settings') saveDungeonSettings();
   else if (a === 'shop-buy') shopBuy(el.dataset.name);
   else if (a === 'open-profile') { switchView('profile'); }
@@ -461,7 +469,7 @@ function renderCharacter(c, st) {
         <div class="char-ico">${race.ico}</div>
         <div class="char-meta">
           <div class="char-name">Lv.${c.level} ${esc(c.race)}</div>
-          <div class="exp-row"><div class="exp-bar"><i style="width:${c.level >= 6 ? 100 : Math.min(100, Math.round(c.exp / expNeed(c.level) * 100))}%"></i></div><span class="exp-text">${c.level >= 6 ? 'MAX' : `${c.exp} / ${expNeed(c.level)}`}</span></div>
+          <div class="exp-row"><div class="exp-bar"><i style="width:${c.level >= 6 ? 100 : Math.min(100, Math.round(c.exp / expNeed(c.level) * 100))}%"></i></div><span class="exp-text">${c.level >= 6 ? '经验 MAX' : `经验 ${c.exp} / ${expNeed(c.level)}${c.exp < expNeed(c.level) ? ` · 升级还需 ${expNeed(c.level) - c.exp}` : ''}`}</span></div>
         </div>
         <div class="gold-big">🪙 ${c.gold}</div>
       </div>
@@ -471,11 +479,11 @@ function renderCharacter(c, st) {
     <section class="panel glass">
       <h3 class="panel-title">属性</h3>
       <div class="attr-grid">
-        <div class="attr-cell"><span>攻击</span><b>${c.attack}</b></div>
-        <div class="attr-cell"><span>防御</span><b>${c.defense}</b></div>
-        <div class="attr-cell"><span>暴击率</span><b>${c.crit_rate}%</b></div>
-        <div class="attr-cell"><span>暴击伤害</span><b>${c.crit_dmg}%</b></div>
-        <div class="attr-cell"><span>金币加成</span><b>${c.gold_bonus}%</b></div>
+        <div class="attr-cell"><span>攻击</span><b class="v-atk">${c.attack}</b></div>
+        <div class="attr-cell"><span>防御</span><b class="v-def">${c.defense}</b></div>
+        <div class="attr-cell"><span>暴击率</span><b class="v-crit">${c.crit_rate}%</b></div>
+        <div class="attr-cell"><span>暴击伤害</span><b class="v-critd">${c.crit_dmg}%</b></div>
+        <div class="attr-cell"><span>金币加成</span><b class="v-gold">${c.gold_bonus}%</b></div>
         <div class="attr-cell"><span>今日副本</span><b>${remaining} 次</b></div>
         <div class="attr-cell"><span>一章 Boss</span><b>${c.boss_kills_ch1} 次</b></div>
         <div class="attr-cell"><span>二章 Boss</span><b>${c.boss_kills_ch2} 次</b></div>
@@ -604,18 +612,19 @@ function renderDungeonPage(st) {
   if (st.in_dungeon) {
     const p = st.dungeon_progress || {};
     const hasCache = !!dungeonSession;
+    const ended = !hasCache && (p.finished || p.failed);
     const doneCount = hasCache ? dungeonSession.idx : Math.max(0, p.next_slot - 1);
     const curEv = hasCache ? dungeonSession.events[dungeonSession.idx] : null;
-    const encounterChoices = curEv && curEv.type === 'encounter' && curEv.choices && curEv.choices.length
+    const encounterChoices = !ended && curEv && curEv.type === 'encounter' && curEv.choices && curEv.choices.length
       ? `<div class="event-choices">${curEv.choices.map((c, i) => `<button class="choice" data-action="dungeon-event" data-choice="${i + 1}">${esc(c)}</button>`).join('')}</div>` : '';
     return `
-      <div class="page-title"><h2>副本</h2><p class="muted">正在进行 · 第 ${p.chapter} 章</p></div>
+      <div class="page-title"><h2>副本</h2><p class="muted">${ended ? (p.failed ? `本次副本失败 · 第 ${p.chapter} 章` : `副本已结束 · 第 ${p.chapter} 章`) : `正在进行 · 第 ${p.chapter} 章`}</p></div>
       <section class="panel glass">
         <h3 class="panel-title">事件进度</h3>
-        ${hasCache ? renderEventTrack(dungeonSession.events, dungeonSession.idx) : `<p class="empty-tip">副本进行中（第 ${p.next_slot}/${p.total} 个事件）。刷新页面后无法预览事件，可继续挑战或直接结算。</p>`}
+        ${hasCache ? renderEventTrack(dungeonSession.events, dungeonSession.idx) : ended ? `<p class="empty-tip">本次副本${p.failed ? '失败' : '通关'}（已完成 ${Math.min(p.next_slot - 1, p.total)}/${p.total} 个事件），请点击「结算副本」领取结算与战报。</p>` : `<p class="empty-tip">副本进行中（第 ${Math.min(p.next_slot, p.total)}/${p.total} 个事件）。刷新页面后无法预览事件，可继续挑战或直接结算。</p>`}
         ${encounterChoices}
         <div class="dungeon-actions">
-          <button class="primary" data-action="dungeon-event">${hasCache ? '挑战当前事件' : '继续挑战'}</button>
+          ${ended ? '' : `<button class="primary" data-action="dungeon-event">${hasCache ? '挑战当前事件' : '继续挑战'}</button>`}
           <button class="ghost" data-action="dungeon-settle">结算副本</button>
         </div>
       </section>
@@ -634,11 +643,13 @@ function renderDungeonPage(st) {
           <div class="chapter-ico">🌲</div>
           <div class="chapter-name">第一章 · 灰烬森林</div>
           <p class="muted">等级 1 起 · 5 种怪物 · 3 种奇遇</p>
+          <button class="chapter-info-btn" data-action="dungeon-info" data-chapter="1">📋 详情 · 掉落与剧情</button>
         </div>
         <div class="chapter-card ${st.chapter === 2 ? 'active' : ''} ${ch2Locked ? 'locked' : ''}">
           <div class="chapter-ico">⛏️</div>
           <div class="chapter-name">第二章 · 沉没矿坑</div>
           <p class="muted">${ch2Locked ? '未解锁：需要 等级≥3 且击败第一章 Boss ≥1 次' : '已解锁'}</p>
+          <button class="chapter-info-btn" data-action="dungeon-info" data-chapter="2">📋 详情 · 掉落与剧情</button>
         </div>
       </div>
       <div class="dungeon-actions">
@@ -656,6 +667,20 @@ function renderDungeonPage(st) {
       ${renderSettingsForm(ap)}
     </section>
     ${renderDungeonSummary(st)}`;
+}
+
+// 副本选择详情：掉落物、概率、可触发剧情（简略）
+async function showDungeonInfo(chapter) {
+  try {
+    const d = await api('/api/rpg/dungeon/info?chapter=' + encodeURIComponent(chapter));
+    openModal(`<h2>${esc(d.name)} · 第 ${d.chapter} 章</h2>
+      <p class="muted">怪物：${d.monsters.map(m => (m.tier === 'boss' ? '👑 ' : m.tier === 'elite' ? '💀 ' : '') + esc(m.name)).join('、')}</p>
+      <h3 class="panel-title">掉落与概率</h3>
+      ${d.drops.map(g => `<div class="drop-group"><b>${esc(g.name)}</b><ul>${g.items.map(it => `<li>${esc(it.name)} · ${esc(it.rate)}${it.note ? ` <span class="muted">${esc(it.note)}</span>` : ''}</li>`).join('')}</ul></div>`).join('')}
+      <h3 class="panel-title">可触发剧情</h3>
+      ${d.encounters.map(e => `<div class="drop-group"><b>${esc(e.name)}</b><p class="muted">${esc(e.desc)}</p></div>`).join('') || '<p class="muted">暂无剧情</p>'}
+      <div class="dungeon-actions"><button class="ghost" data-action="close-modal">关闭</button></div>`);
+  } catch (e) { toast(e.message, true); }
 }
 
 function renderDungeonSummary(st) {
@@ -698,8 +723,8 @@ async function startDungeon() {
   const chapter = Number($('#dungeonChapter').value || 1);
   try {
     const d = await api('/api/rpg/dungeon/start', { method: 'POST', body: { chapter } });
-    dungeonSession = { chapter: d.chapter, events: d.events, idx: 0 };
-    rpg.gold = 0; updateGold();
+    dungeonSession = { chapter: d.chapter, events: d.events, idx: 0, runGold: 0, baseGold: rpg.gold };
+    updateGold();
     toast('副本开始！');
     viewDungeon();
   } catch (e) { toast(e.message, true); }
@@ -716,6 +741,16 @@ function renderEventTrack(events, idx) {
   </div>`;
 }
 
+// 渲染副本事件推进按钮区：结算 / 继续探索 / 下一事件为奇遇时直接渲染选项
+function renderDungeonActions(finish) {
+  if (finish) return '<button class="primary" data-action="dungeon-settle">结算副本</button>';
+  const next = dungeonSession && dungeonSession.events[dungeonSession.idx];
+  if (next && next.type === 'encounter' && next.choices && next.choices.length) {
+    return `<div class="event-choices">${next.choices.map((c, i) => `<button class="choice" data-action="dungeon-event" data-choice="${i + 1}">${esc(c)}</button>`).join('')}</div>`;
+  }
+  return '<button class="primary" data-action="dungeon-event">继续探索</button>';
+}
+
 async function dungeonEvent(choice) {
   const body = {};
   if (choice) body.choice = Number(choice);
@@ -727,13 +762,19 @@ async function dungeonEvent(choice) {
     }
     const d = await api('/api/rpg/dungeon/event', { method: 'POST', body });
     if (d.failed) {
+      const runGold = dungeonSession ? (dungeonSession.runGold || 0) : 0;
+      rpg.gold = Math.max(0, rpg.gold + runGold - (d.gold_loss || 0));
       dungeonSession = null;
+      updateGold();
       $('#view').innerHTML = renderBattleResult(d, true) + `
         <section class="panel glass"><h3 class="panel-title">战败结算</h3><p class="muted">本次副本失败，损失 ${d.gold_loss} 金币（保留经验与普通材料）。</p></section>`;
+      playBattleReplay(d);
       rpg.dungeon = { ...rpg.dungeon, in_dungeon: false };
       return;
     }
     if (d.encounter) {
+      dungeonSession.runGold += d.gold || 0;
+      updateGold();
       dungeonSession.idx++;
       const finish = d.finished;
       const cur = renderEncounterResult(d);
@@ -742,11 +783,13 @@ async function dungeonEvent(choice) {
         <section class="panel glass">${renderEventTrack(dungeonSession.events, dungeonSession.idx)}</section>
         ${cur}
         <section class="panel glass"><div class="dungeon-actions">
-          ${finish ? '<button class="primary" data-action="dungeon-settle">结算副本</button>' : '<button class="primary" data-action="dungeon-event">继续探索</button>'}
+          ${renderDungeonActions(finish)}
         </div></section>`;
       return;
     }
     // 战斗
+    dungeonSession.runGold += d.gold || 0;
+    updateGold();
     dungeonSession.idx++;
     const finish = d.finished;
     $('#view').innerHTML = `
@@ -754,8 +797,9 @@ async function dungeonEvent(choice) {
       <section class="panel glass">${renderEventTrack(dungeonSession.events, dungeonSession.idx)}</section>
       ${renderBattleResult(d, false)}
       <section class="panel glass"><div class="dungeon-actions">
-        ${finish ? '<button class="primary" data-action="dungeon-settle">结算副本</button>' : '<button class="primary" data-action="dungeon-event">继续探索</button>'}
+        ${renderDungeonActions(finish)}
       </div></section>`;
+    playBattleReplay(d);
   } catch (e) { toast(e.message, true); }
 }
 
@@ -775,9 +819,31 @@ function renderEncounterResult(d) {
 function renderBattleResult(d, failed) {
   const lines = (d.log || []).map(x => `<li>${esc(x)}</li>`).join('');
   const drops = (d.drops || []).map(x => `<span class="r-item">📦 ${esc(x.name)}（${QUALITY_CN[x.quality] || x.quality}）</span>`).join('');
+  const trace = d.hpTrace && d.hpTrace.length ? d.hpTrace : null;
+  const pName = d.playerName || (rpg.char ? `${rpg.char.race}·冒险者` : '冒险者');
+  const pEmoji = rpg.char ? (RACE_INFO[rpg.char.race] ? RACE_INFO[rpg.char.race].ico : '🧑') : '🧑';
+  const mEmoji = MONSTER_EMOJI[d.monster] || '👾';
+  const t0 = trace ? trace[0] : null;
+  const pHp = t0 ? t0.p : d.cur_hp, pMax = t0 ? t0.pm : (rpg.char && rpg.char.max_hp) || 100;
+  const mHp = t0 ? t0.m : 100, mMax = t0 ? t0.mm : 100;
+  const pPct = Math.max(0, Math.round(pHp / Math.max(1, pMax) * 100));
+  const mPct = Math.max(0, Math.round(mHp / Math.max(1, mMax) * 100));
   return `<section class="panel glass">
     <h3 class="panel-title">${failed ? '战败' : '战斗胜利'} · ${esc(d.monster)}${d.tier ? `（${d.tier === 'boss' ? 'Boss' : d.tier === 'elite' ? '精英' : '普通'}）` : ''}</h3>
-    <ul class="battle-log">${lines}</ul>
+    <div class="battle-stage" id="battleStage">
+      <div class="bs-side player">
+        <div class="bs-emoji">${pEmoji}</div>
+        <div class="bs-name">${esc(pName)}</div>
+        <div class="bs-hp"><i style="width:${pPct}%"></i><span>${pHp} / ${pMax}</span></div>
+      </div>
+      <div class="bs-vs">⚔️</div>
+      <div class="bs-side enemy">
+        <div class="bs-emoji">${mEmoji}</div>
+        <div class="bs-name">${esc(d.monster)}</div>
+        <div class="bs-hp"><i style="width:${mPct}%"></i><span>${mHp} / ${mMax}</span></div>
+      </div>
+    </div>
+    <ul class="battle-log replay" id="battleLog"></ul>
     ${failed ? `<div class="reward-line"><span class="r-loss">🪙 -${d.gold_loss} 金币</span></div>` : `
     <div class="reward-line">
       <span class="r-exp">✨ 经验 +${d.exp}</span>
@@ -788,10 +854,49 @@ function renderBattleResult(d, failed) {
   </section>`;
 }
 
+// 战斗演出：按 hpTrace 血条回落 + 2 行 2 行逐步跳出（纯展示）
+function playBattleReplay(d) {
+  const stage = $('#battleStage'); if (!stage) return;
+  const logBox = $('#battleLog'); if (!logBox) return;
+  const pBar = stage.querySelector('.bs-side.player .bs-hp');
+  const mBar = stage.querySelector('.bs-side.enemy .bs-hp');
+  const lines = d.log || [];
+  const trace = d.hpTrace && d.hpTrace.length ? d.hpTrace : null;
+  if (!trace) { logBox.innerHTML = lines.map(x => `<li>${esc(x)}</li>`).join(''); return; }
+  const apply = (t) => {
+    if (!t) return;
+    pBar.querySelector('i').style.width = Math.max(0, Math.round(t.p / Math.max(1, t.pm) * 100)) + '%';
+    pBar.querySelector('span').textContent = t.p + ' / ' + t.pm;
+    mBar.querySelector('i').style.width = Math.max(0, Math.round(t.m / Math.max(1, t.mm) * 100)) + '%';
+    mBar.querySelector('span').textContent = t.m + ' / ' + t.mm;
+  };
+  apply(trace[0]);
+  let ti = 0;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  (async () => {
+    for (let i = 0; i < lines.length; i++) {
+      await sleep(520);
+      const li = document.createElement('li');
+      li.textContent = lines[i];
+      if (/攻击|造成|撕裂|诅咒|狂暴|流血|破甲|反弹|干扰|削弱|硬化|召唤|恢复|治疗|药水|吸血|反震|护盾|增幅/.test(lines[i])) li.classList.add('hit');
+      logBox.appendChild(li);
+      if (i % 2 === 1) { ti = Math.min(ti + 1, trace.length - 1); apply(trace[ti]); }
+      const shake = [];
+      if (/你攻击|你造成|你恢复|你使用/.test(lines[i])) shake.push(mBar);
+      if (/敌人攻击|敌人撕裂|敌人反弹|流血造成|敌人施加|敌人干扰|敌人削弱|敌人破甲|你受到|诅咒/.test(lines[i])) shake.push(pBar);
+      shake.forEach(el => { el.classList.add('bs-shake'); setTimeout(() => el.classList.remove('bs-shake'), 400); });
+    }
+    if (ti < trace.length - 1) { ti = trace.length - 1; apply(trace[ti]); }
+  })();
+}
+
 async function dungeonSettle() {
   try {
     const d = await api('/api/rpg/dungeon/settle', { method: 'POST' });
+    const runGold = dungeonSession ? (dungeonSession.runGold || 0) : 0;
     dungeonSession = null;
+    rpg.gold += runGold;
+    updateGold();
     const battles = (d.battles || []).map(b => `
       <div class="battle-card">
         <div class="battle-head">事件 ${b.event} · ${esc(b.monster)} · ${b.win ? '✅ 胜' : '❌ 败'}</div>
@@ -922,7 +1027,9 @@ async function shopBuy(name) {
  * ================================================================ */
 function updateGold() {
   const p = $('#goldPill');
-  if (p) p.innerHTML = `🪙 <b>${rpg.gold ?? 0}</b> 金币`;
+  if (!p) return;
+  const run = dungeonSession ? (dungeonSession.runGold || 0) : 0;
+  p.innerHTML = `🪙 <b>${rpg.gold ?? 0}</b> 金币${run > 0 ? `<span class="run-gold"> · 本次 +${run}</span>` : ''}`;
 }
 
 function renderShellUser() {

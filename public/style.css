@@ -369,6 +369,7 @@ textarea.uploading{border-color:var(--mint)!important;opacity:.8}
  * ================================================================ */
 .gold-pill{display:flex;align-items:center;gap:6px;background:linear-gradient(135deg,#f59e0b26,#d9770614);border:1px solid #f59e0b45;color:var(--orange);padding:6px 14px;border-radius:999px;font-size:13px;font-weight:700;white-space:nowrap}
 .gold-pill b{color:var(--text)}
+.gold-pill .run-gold{color:#f59e0b;font-weight:700}
 .page-title{margin:4px 0 14px}
 .page-title h2{margin:0;font-size:22px;letter-spacing:.5px}
 .page-title .muted{margin:2px 0 0}
@@ -537,3 +538,34 @@ textarea.uploading{border-color:var(--mint)!important;opacity:.8}
   .chat-panel{bottom:84px;left:8px;right:8px;height:56vh}
   .chat-fab{bottom:84px;right:10px}
 }
+
+/* ---- 属性强调色（反馈第1条） ---- */
+.st-atk{color:#ff9f6b}.st-def{color:#79b8ff}.st-hp{color:#ff8a8a}.st-crit{color:#ffd166}.st-critd{color:#ff7ac2}.st-gold{color:#ffd36b}.st-other{color:var(--muted)}
+.v-atk{color:#ff9f6b}.v-def{color:#79b8ff}.v-crit{color:#ffd166}.v-critd{color:#ff7ac2}.v-gold{color:#ffd36b}
+
+/* ---- 副本详情弹窗（反馈第5条） ---- */
+.chapter-card{position:relative}
+.chapter-info-btn{margin-top:10px;padding:6px 14px;font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;background:#ffffff08;transition:.18s}
+.chapter-info-btn:hover{color:var(--orange);border-color:var(--orange)}
+.drop-group{margin:8px 0}
+.drop-group b{font-size:13px;color:var(--text)}
+.drop-group ul{margin:4px 0 0;padding-left:18px;color:var(--muted);font-size:12.5px}
+.drop-group li{margin:2px 0}
+
+/* ---- 战斗演出（反馈第4条：双方名称血条/emoji模型/攻击特效/逐行跳出） ---- */
+.battle-stage{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:10px 0 4px;padding:14px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:14px}
+.bs-side{flex:1;text-align:center;min-width:0}
+.bs-emoji{font-size:44px;line-height:1.1;margin-bottom:4px}
+.bs-name{font-size:13px;font-weight:800;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:6px}
+.bs-hp{height:10px;background:var(--panel3);border-radius:999px;overflow:hidden;position:relative}
+.bs-hp i{display:block;height:100%;border-radius:999px;transition:width .45s ease}
+.bs-side.player .bs-hp i{background:linear-gradient(90deg,#79e1c2,#34d399)}
+.bs-side.enemy .bs-hp i{background:linear-gradient(90deg,#f87171,#ef4444)}
+.bs-hp span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:9px;color:#fff;text-shadow:0 0 3px rgba(0,0,0,.7);line-height:1;pointer-events:none}
+.bs-vs{font-size:22px;flex:0 0 auto;color:var(--orange)}
+.bs-shake{animation:bsShake .38s ease}
+@keyframes bsShake{0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}50%{transform:translateX(5px)}75%{transform:translateX(-3px)}}
+.battle-log.replay{list-style:none;padding-left:0;max-height:260px;overflow-y:auto;margin-top:10px}
+.battle-log.replay li{opacity:0;animation:logIn .3s ease forwards;padding:2px 10px;border-radius:6px}
+.battle-log.replay li.hit{color:#ffd36b;background:rgba(245,158,11,.08)}
+@keyframes logIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}

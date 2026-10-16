@@ -331,7 +331,11 @@ function local(req){ return ['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.
 function originOK(req){
   const origin = req.headers.origin;
   if(!origin) return false;
-  return origin === (process.env.PUBLIC_ORIGIN || `http://${req.headers.host}`);
+  const publicOrigin = (process.env.PUBLIC_ORIGIN || '').replace(/\/+$/, '');
+  if(publicOrigin && origin.replace(/\/+$/, '') === publicOrigin) return true;
+  const o = origin.replace(/^https?:\/\//i, '').replace(/\/+$/, '').replace(/:\d+$/, '');
+  const h = String(req.headers.host || '').replace(/\/+$/, '').replace(/:\d+$/, '');
+  return o === h;
 }
 function broadcast(type, payload){ const data = JSON.stringify({ type, payload }); for(const s of sockets) if(s.readyState === WebSocket.OPEN) s.send(data); }
 function presence(){
@@ -416,7 +420,8 @@ const server = http.createServer(async (req, res) => {
         'Content-Type': file.endsWith('.js') ? 'text/javascript; charset=utf-8'
           : file.endsWith('.css') ? 'text/css; charset=utf-8'
           : file.endsWith('.png') ? 'image/png'
-          : 'text/html; charset=utf-8'
+          : 'text/html; charset=utf-8',
+        'Cache-Control': 'no-cache'
       });
       return res.end(readFileSync(resolve(root, 'public', file)));
     }
@@ -615,6 +620,9 @@ function simulateBattle(playerRow, monsterKey, opts){
   const pb = { atkMulNext: 1, noCritNext: false, shieldReduceNext: false, defDown: 0, defDownT: 0, curse: 0, curseT: 0, bleed: 0, bleedT: 0, healUsed: 0 };
   const mb = { armor: 0, armorUses: 0, turns: 0, hitCount: 0, healUsed: false, summonUsed: false };
   const log = [];
+  const hpTrace = [];
+  const traceHp = () => hpTrace.push({ p: Math.max(0, stats.cur_hp), pm: stats.max_hp, m: Math.max(0, m.hp), mm: m.maxHp });
+  traceHp();
   const potionCfg = {
     enabled: opts.autoPotion !== false,
     threshold: opts.potionThreshold != null ? opts.potionThreshold : (playerRow.potion_threshold != null ? playerRow.potion_threshold : 35),
@@ -733,10 +741,11 @@ function simulateBattle(playerRow, monsterKey, opts){
       log.push('敌人破甲，你的防御降低 ' + monster.armor_break_amt + ' 点');
     }
   }
+  traceHp();
   const win = m.hp <= 0;
   stats.cur_hp = Math.max(0, Math.min(stats.max_hp, stats.cur_hp));
   stmt('UPDATE player SET cur_hp=? WHERE user_id=?', stats.cur_hp, playerRow.user_id);
-  return { win, curHp: stats.cur_hp, turns: mb.turns, log, healUsed: pb.healUsed };
+  return { win, curHp: stats.cur_hp, turns: mb.turns, log, hpTrace, healUsed: pb.healUsed };
 }
 
 /* 副本事件生成：4格，至少1普通战斗+至少1非战斗，精英25%，Boss固定第4格 */
@@ -885,8 +894,9 @@ async function handleDungeonStart(req, res, u){
   const gen = generateDungeonEvents(chapter, bossRate);
   const session = { chapter, events: gen.events, idx: 0, startedAt: now(), potionsUsed: 0, exp: 0, gold: 0, drops: [], bossKilled: false, failed: false, failedAt: null, nextMonsterAtkBonus: 0, bossBoost: oldMap ? 1 : 0, oldMap, battleLogs: [], nextForceElite: false };
   dungeonSessions.set(u.id, session);
-  p.daily_count++; p.last_dungeon_date = today; p.cur_hp = p.max_hp;
-  stmt('UPDATE player SET daily_count=?, last_dungeon_date=?, cur_hp=? WHERE user_id=?', p.daily_count, today, p.max_hp, u.id);
+  const fullHp = computeStats(p, getPlayerItems(u.id)).max_hp;
+  p.daily_count++; p.last_dungeon_date = today; p.cur_hp = fullHp;
+  stmt('UPDATE player SET daily_count=?, last_dungeon_date=?, cur_hp=? WHERE user_id=?', p.daily_count, today, fullHp, u.id);
   const remaining = DUNGEON_DAILY_LIMIT - p.daily_count;
   return out(res, 201, { ok: true, chapter, remaining, old_map_used: oldMap, events: gen.events.map(e => ({ slot: e.slot, type: e.type, name: e.name, desc: e.desc, choices: e.choices })) });
 }
@@ -930,17 +940,21 @@ async function handleDungeonEvent(req, res, u){
       }
       s.idx++;
       const done = s.idx >= s.events.length;
-      return out(res, 200, { ok: true, win: true, monster: ev.monster, tier: ev.tier, exp: rewards.exp, gold: rewards.gold, drops: rewards.drops, healUsed: battle.healUsed, cur_hp: p.cur_hp, level: p.level, log: battle.log, remaining_events: s.events.length - s.idx, finished: done });
+      return out(res, 200, { ok: true, win: true, monster: ev.monster, tier: ev.tier, exp: rewards.exp, gold: rewards.gold, drops: rewards.drops, healUsed: battle.healUsed, cur_hp: p.cur_hp, level: p.level, log: battle.log, hpTrace: battle.hpTrace, playerName: u.display_name || u.username, remaining_events: s.events.length - s.idx, finished: done });
     }
     const lossRate = raceFailGoldLoss(p.race);
     const loss = Math.floor(p.gold * lossRate);
     p.gold = Math.max(0, p.gold - loss);
     stmt('UPDATE player SET gold=? WHERE user_id=?', p.gold, u.id);
     s.failed = true; s.failedAt = ev.slot; s.idx = s.events.length;
-    return out(res, 200, { ok: true, win: false, monster: ev.monster, gold_loss: loss, cur_hp: 0, log: battle.log, finished: true, failed: true });
+    const fullHp = computeStats(p, getPlayerItems(u.id)).max_hp;
+    p.cur_hp = fullHp;
+    stmt('UPDATE player SET cur_hp=? WHERE user_id=?', fullHp, u.id);
+    return out(res, 200, { ok: true, win: false, monster: ev.monster, gold_loss: loss, cur_hp: fullHp, log: battle.log, hpTrace: battle.hpTrace, playerName: u.display_name || u.username, finished: true, failed: true });
   }
   const choice = Number(b.choice) || 1;
   const r = handleEncounter(p, ev, choice, s);
+  if (r.gold) s.gold += r.gold;
   s.idx++;
   const done = s.idx >= s.events.length;
   return out(res, 200, { ok: true, encounter: ev.name, choice, log: r.log, gold: r.gold, hp: r.hp, items: r.items, remaining_events: s.events.length - s.idx, finished: done });
@@ -950,6 +964,11 @@ function handleDungeonSettle(req, res, u){
   const s = dungeonSessions.get(u.id);
   if(!s) return out(res, 400, { error: '没有进行中的副本' });
   dungeonSessions.delete(u.id);
+  const p = getPlayer(u.id);
+  if(p){
+    const fullHp = computeStats(p, getPlayerItems(u.id)).max_hp;
+    stmt('UPDATE player SET cur_hp=? WHERE user_id=?', fullHp, u.id);
+  }
   return out(res, 200, {
     ok: true, chapter: s.chapter, total_events: s.events.length, completed_events: Math.min(s.idx, s.events.length),
     boss_killed: s.bossKilled, failed: s.failed, failed_at: s.failedAt, exp: s.exp, gold: s.gold,
@@ -968,8 +987,33 @@ function handleDungeonStatus(req, res, u){
     chapter: p.chapter, level: p.level, boss_kills_ch1: p.boss_kills_ch1, boss_kills_ch2: p.boss_kills_ch2,
     ch2_unlocked: p.level >= 3 && p.boss_kills_ch1 >= 1,
     auto_potion: { enabled: p.auto_potion !== 0, threshold: p.potion_threshold != null ? p.potion_threshold : 35, limit: p.potion_limit != null ? p.potion_limit : 1 },
-    in_dungeon: !!s, dungeon_progress: s ? { chapter: s.chapter, next_slot: s.idx + 1, total: s.events.length, finished: s.idx >= s.events.length } : null
+    in_dungeon: !!s, dungeon_progress: s ? { chapter: s.chapter, next_slot: s.idx + 1, total: s.events.length, finished: s.idx >= s.events.length, failed: s.failed } : null
   });
+}
+
+/* 副本信息：章节掉落与概率、可触发剧情（副本选择详情页） */
+function handleDungeonInfo(req, res, u){
+  const chapter = Number(new URL(req.url, 'http://x').searchParams.get('chapter')) || 1;
+  const cfg = CHAPTER_CONFIG[chapter];
+  if(!cfg) return out(res, 404, { error: '章节不存在' });
+  const qcn = { normal: '普通', fine: '优良', superb: '精良', rare: '稀有' };
+  const pct = n => (n * 100).toFixed(n >= 0.1 ? 0 : 1) + '%';
+  const equipNames = cfg.equip.map(e => e.name).slice(0, 3).join('、');
+  const tierDrop = (tierKey, label) => {
+    const t = DROP_TABLE[tierKey];
+    return { name: label, items: Object.entries(t).map(([q, v]) => ({ name: qcn[q], rate: pct(v) })).concat([{ name: '装备池', rate: '—', note: equipNames + ' 等' }]) };
+  };
+  const drops = [
+    tierDrop('normal', '普通战斗'),
+    tierDrop('elite', '精英战斗'),
+    tierDrop(cfg.drop, 'Boss战（' + cfg.boss + '）'),
+    { name: '材料掉落', items: [
+      { name: cfg.normal_mat[0] + ' 等', rate: '必定掉落', note: '普通战必得 1 份' },
+      { name: '黑狼牙', rate: '精英/Boss 必得', note: '' }
+    ]}
+  ];
+  const encounters = cfg.encounters.map(n => ({ name: n, desc: (ENCOUNTER_CONFIG[n] || {}).desc || '' }));
+  return out(res, 200, { chapter, name: cfg.name, monsters: cfg.normal.concat(cfg.elite, [cfg.boss]).map(k => ({ name: k, tier: MONSTER_CONFIG[k].tier })), drops, encounters });
 }
 
 async function handleDungeonSettings(req, res, u){
@@ -1170,6 +1214,7 @@ async function handleMarketCancel(req, res, u){
     if(path === '/api/rpg/dungeon/event' && method === 'POST') return await handleDungeonEvent(req, res, u);
     if(path === '/api/rpg/dungeon/settle' && method === 'POST') return handleDungeonSettle(req, res, u);
     if(path === '/api/rpg/dungeon/status' && method === 'GET') return handleDungeonStatus(req, res, u);
+    if(path === '/api/rpg/dungeon/info' && method === 'GET') return handleDungeonInfo(req, res, u);
     if(path === '/api/rpg/dungeon/settings' && method === 'POST') return await handleDungeonSettings(req, res, u);
 
     /* ========== 阶段3：铁匠铺 / 商店 / 交易行接口（第 7 节） ========== */
