@@ -429,13 +429,14 @@ const server = http.createServer(async (req, res) => {
         });
         return res.end(readFileSync(resolve(uploads, name)));
       }
-      const files = { '/':'index.html', '/app.js':'app.js', '/style.css':'style.css', '/campfire.png':'campfire.png' };
+      const files = { '/':'index.html', '/app.js':'app.js', '/style.css':'style.css', '/campfire.png':'campfire.png', '/favicon.ico':'favicon.ico', '/favicon-16x16.png':'favicon-16x16.png', '/favicon-32x32.png':'favicon-32x32.png', '/favicon-48x48.png':'favicon-48x48.png', '/favicon-64x64.png':'favicon-64x64.png', '/favicon-192x192.png':'favicon-192x192.png', '/favicon-512x512.png':'favicon-512x512.png', '/apple-touch-icon.png':'apple-touch-icon.png', '/android-chrome-192x192.png':'android-chrome-192x192.png' };
       const file = files[path];
       if(!file || !existsSync(resolve(root, 'public', file))) return out(res, 404, { error: '页面不存在' });
       res.writeHead(200, {
         'Content-Type': file.endsWith('.js') ? 'text/javascript; charset=utf-8'
           : file.endsWith('.css') ? 'text/css; charset=utf-8'
           : file.endsWith('.png') ? 'image/png'
+          : file.endsWith('.ico') ? 'image/x-icon'
           : 'text/html; charset=utf-8',
         'Cache-Control': 'no-cache'
       });

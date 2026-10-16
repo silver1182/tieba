@@ -1,5 +1,5 @@
 /* ================================================================
- * Campfire Arcade · 篝火社区 前端应用
+ * 我的冒险 · 篝火社区 前端应用
  * 阶段4：前端重构 —— 底部导航 5 页（角色/背包/副本/铁匠铺/商店）
  * 保留：登录注册（邀请码门槛）、个人资料、实时聊天
  * 移除：发帖/回复/点赞/收藏/活动/通知/游戏页
@@ -515,7 +515,7 @@ function renderCharacter(c, st) {
   const remaining = st ? st.remaining : Math.max(0, 5 - (c.daily_count || 0));
 
   return `
-    <div class="page-title"><h2>角色</h2><p class="muted">${esc(c.race)} · ${esc(race.tag)}</p></div>
+    <div class="page-title"><h2>角色</h2><p class="muted">整备装备，准备出发</p></div>
 
     <section class="panel glass rpg-head">
       <div class="rpg-head-top">
@@ -575,7 +575,7 @@ async function viewBackpack() {
     rpg.gold = d.gold;
     updateGold();
     $('#view').innerHTML = `
-      <div class="page-title"><h2>背包</h2><p class="muted">🪙 ${rpg.gold} 金币</p></div>
+      <div class="page-title"><h2>背包</h2><p class="muted">管理你的冒险收获</p></div>
       <div class="tabs" id="bpTabs">
         <button data-action="bp-tab" data-tab="equipment" class="active">装备</button>
         <button data-action="bp-tab" data-tab="consumable">消耗品</button>
@@ -688,7 +688,7 @@ function renderDungeonPage(st) {
       ${renderDungeonSummary(st)}`;
   }
   return `
-    <div class="page-title"><h2>副本</h2><p class="muted">今日剩余 ${st.remaining} 次</p></div>
+    <div class="page-title"><h2>副本</h2><p class="muted">深入未知，寻找宝藏</p></div>
     <section class="panel glass">
       <h3 class="panel-title">选择章节</h3>
       <div class="chapter-grid">
@@ -992,7 +992,7 @@ async function viewForge() {
     const cat = await api('/api/rpg/forge/catalog');
     rpg.forge = cat;
     $('#view').innerHTML = `
-      <div class="page-title"><h2>铁匠铺</h2><p class="muted">合成材料、制作药水与装备</p></div>
+      <div class="page-title"><h2>铁匠铺</h2><p class="muted">以材料锻造更强装备</p></div>
       <div class="tabs" id="forgeTabs">
         <button data-action="forge-tab" data-tab="material">材料合成</button>
         <button data-action="forge-tab" data-tab="potion">药水制作</button>
@@ -1049,7 +1049,7 @@ async function viewShop() {
     try { const b = await api('/api/rpg/character'); rpg.gold = b.character.gold; } catch {}
     updateGold();
     $('#view').innerHTML = `
-      <div class="page-title"><h2>商店</h2><p class="muted">🪙 ${rpg.gold} 金币</p></div>
+      <div class="page-title"><h2>商店</h2><p class="muted">补给、交易与冒险准备</p></div>
       <div class="shop-grid">
         ${rpg.shop.map(it => `
           <div class="shop-card glass">

@@ -108,7 +108,8 @@ a{color:var(--orange);text-decoration:none}
 .side-mask.open{opacity:1;pointer-events:auto}
 .sidebar{display:flex;flex-direction:column;border-radius:var(--radius);padding:14px 12px;overflow-y:auto}
 .side-brand{display:flex;gap:10px;align-items:center;padding:4px 8px 14px;border-bottom:1px solid rgba(255,255,255,.07);margin-bottom:10px}
-.side-logo{width:38px;height:38px;border-radius:11px;background:linear-gradient(135deg,var(--orange),var(--orange2));color:#1c1206;font-weight:800;font-size:18px;display:flex;align-items:center;justify-content:center;flex:none}
+.side-logo{width:38px;height:38px;border-radius:11px;background:linear-gradient(135deg,var(--orange),var(--orange2));color:#1c1206;font-weight:800;font-size:18px;display:flex;align-items:center;justify-content:center;flex:none;overflow:hidden}
+.side-logo img{width:100%;height:100%;object-fit:cover;display:block}
 .side-title{font-weight:800;font-size:14.5px}
 .side-sub{font-size:10.5px;color:var(--muted)}
 .side-nav{display:flex;flex-direction:column;gap:3px;flex:1}
@@ -128,7 +129,8 @@ a{color:var(--orange);text-decoration:none}
 .main-col{display:flex;flex-direction:column;gap:12px;min-height:0;overflow:hidden}
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;border-radius:var(--radius);padding:10px 16px;flex:none}
 .brand{display:flex;gap:12px;align-items:center}
-.brand-mark{width:44px;height:44px;border-radius:13px;background:linear-gradient(135deg,var(--orange),var(--orange2));color:#1c1206;font-size:21px;font-weight:800;display:flex;align-items:center;justify-content:center;flex:none;box-shadow:0 6px 16px rgba(245,158,11,.3)}
+.brand-mark{width:44px;height:44px;border-radius:13px;background:linear-gradient(135deg,var(--orange),var(--orange2));color:#1c1206;font-size:21px;font-weight:800;display:flex;align-items:center;justify-content:center;flex:none;box-shadow:0 6px 16px rgba(245,158,11,.3);overflow:hidden}
+.brand-mark img{width:100%;height:100%;object-fit:cover;display:block}
 .brand-name{margin:0;font-size:18px;font-weight:800;letter-spacing:.3px}
 .brand-sub{margin:0;font-size:11px;color:var(--muted)}
 .top-actions{display:flex;gap:12px;align-items:center}

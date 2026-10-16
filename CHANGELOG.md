@@ -2,6 +2,17 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: b3d9dfb1989d5de331291901cce023f8_7abb779cc92b11f18533525400638852
+    ReservedCode1: /6zm73hy7D7KsYtMRCoarGdhBLQuplGleeUFUGWJW2OHvwzPgsEFIqHSP5mLo/P4BaRTvZs/tqVNfn932FxqM2kuHuBuZUbSXDLygElfY4EYEurzawMONhy8zLCdyBn89Rj2wf43G5mG/NWeNVbsyZrYLFX+1AoojHI9vxHxMadCBM8G/fZ2rr7CI2s=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: b3d9dfb1989d5de331291901cce023f8_7abb779cc92b11f18533525400638852
+    ReservedCode2: /6zm73hy7D7KsYtMRCoarGdhBLQuplGleeUFUGWJW2OHvwzPgsEFIqHSP5mLo/P4BaRTvZs/tqVNfn932FxqM2kuHuBuZUbSXDLygElfY4EYEurzawMONhy8zLCdyBn89Rj2wf43G5mG/NWeNVbsyZrYLFX+1AoojHI9vxHxMadCBM8G/fZ2rr7CI2s=
+---
+
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
     ProduceID: b3d9dfb1989d5de331291901cce023f8_9ed09ca6c8b211f18e0e52540064ee0f
     ReservedCode1: ZKWAXHGT9fsqJvUaWMgQZ0Iw9mmF1tlMeCjEOAL/RfHzm2QpIuenQfLw1mII5icLnhLzWeBo5WhiFdqNo9YIfwqeCYrNSCIE5zNut5k+ikfWaBg2gS5kEvyitmb/p6RiBmIOmPmxXAlw4BHyOBtNLubcLhtMzBIUmHBwZ5XvWmi56xwu0XhkLnkegJA=
     ContentPropagator: 001191440300708461136T1XGW3
@@ -18,6 +29,19 @@ AIGC:
 ## Unreleased（未发布）
 
 > 以下改动已部署到线上服务器（dontdie-ai.com，systemd + nginx HTTPS），尚未发布正式版本号。
+
+### 奇幻冒险新图标组与全套文案更新（2026-10-16）
+
+1. **新 favicon 图标组替换**
+   - 采用奇幻冒险风图标（复古地图 + 发光指南针，金 / 深蓝 / 青绿配色）替换全部站点图标：`favicon.ico`（多尺寸）、16 / 32 / 48 / 64 / 180 / 192 / 512 PNG、`apple-touch-icon.png`、`android-chrome-192x192.png`、`android-chrome-512x512.png`、`favicon.png` 及无后缀别名。
+   - `server.mjs` 静态资源白名单补充 `favicon-192x192.png`、`favicon-512x512.png`。
+
+2. **品牌名与副标题文案更新**
+   - 主标题「Campfire Arcade」→「我的冒险」（title / side-title / brand-name / alt 全部替换，副标题去除篝火表述）。
+   - 全局副标题改为「每一次出发，都通往未知」（side-sub / brand-sub）。
+   - 五个页面副标题更新：角色「整备装备，准备出发」、背包「管理你的冒险收获」、副本「深入未知，寻找宝藏」、铁匠铺「以材料锻造更强装备」、商店「补给、交易与冒险准备」。
+
+- 校验：`node --check public/app.js`、`node --check server.mjs` 通过；已部署线上 dontdie-ai.com（systemd restart tieba），curl 验证 title / favicon 200 / 五页副标题全部生效。
 
 ### 账号会话与副本战斗体验优化（2026-10-16）
 
@@ -202,6 +226,7 @@ AIGC:
 
 - `server.mjs` 与 `public/app.js` 均通过 `node --check` 语法校验；CSS 括号平衡检查通过。
 - `uploads/` 目录由服务启动时自动创建。
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
