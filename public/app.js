@@ -126,6 +126,7 @@ let currentShopTab = 'all';
 let shopBuying = false;
 let forgeBusy = false;
 let dungeonSession = null; // { chapter, events, idx } 前端副本会话缓存
+let pendingRandomEvent = null; // { id,title,desc,choices } P2 随机事件待处理缓存
 let chatOpen = window.matchMedia('(min-width: 1025px)').matches;
 
 /* ---------- 导航 ---------- */
@@ -159,6 +160,8 @@ document.addEventListener('click', async e => {
   else if (a === 'dungeon-settle') dungeonSettle();
   else if (a === 'goal-claim') claimGoal(Number(el.dataset.id));
   else if (a === 'daily-claim') claimDailyTask(Number(el.dataset.slot));
+  else if (a === 'rpg-event-open') showRandomEventCard(pendingRandomEvent);
+  else if (a === 'rpg-event-choose') chooseRandomEvent(Number(el.dataset.choice));
   else if (a === 'dungeon-info') showDungeonInfo(el.dataset.chapter);
   else if (a === 'save-settings') saveDungeonSettings();
   else if (a === 'shop-tab') { currentShopTab = el.dataset.tab; renderShopList(); }
@@ -663,12 +666,14 @@ async function viewDungeon() {
   setNav('dungeon');
   $('#view').innerHTML = '<p class="empty-tip">加载中…</p>';
   try {
-    const [st, gl] = await Promise.all([
+    const [st, gl, evt] = await Promise.all([
       api('/api/rpg/dungeon/status'),
-      api('/api/rpg/goals')
+      api('/api/rpg/goals'),
+      api('/api/rpg/events').catch(() => ({ event: null }))
     ]);
     rpg.dungeon = st;
     rpg.goals = gl.goals || [];
+    pendingRandomEvent = evt.event || null;
     $('#view').innerHTML = renderDungeonPage(st);
   } catch (e) {
     if (/尚未创建角色/.test(e.message)) { $('#view').innerHTML = `<p class="empty-tip">尚未创建角色，请先前往「角色」页创建。</p>`; }
@@ -679,6 +684,12 @@ async function viewDungeon() {
 function renderDungeonPage(st) {
   const ap = st.auto_potion || { enabled: true, threshold: 35, limit: 1 };
   const ch2Locked = !st.ch2_unlocked;
+  const pendingBanner = pendingRandomEvent ? `
+    <section class="panel glass">
+      <h3 class="panel-title">✨ 随机事件待处理</h3>
+      <p class="muted">${esc(pendingRandomEvent.title)}：${esc(pendingRandomEvent.desc)}</p>
+      <div class="dungeon-actions"><button class="primary" data-action="rpg-event-open">查看事件</button></div>
+    </section>` : '';
   if (st.in_dungeon) {
     const p = st.dungeon_progress || {};
     const hasCache = !!dungeonSession;
@@ -688,6 +699,7 @@ function renderDungeonPage(st) {
     const encounterChoices = !ended && curEv && curEv.type === 'encounter' && curEv.choices && curEv.choices.length
       ? `<div class="event-choices">${curEv.choices.map((c, i) => `<button class="choice" data-action="dungeon-event" data-choice="${i + 1}">${esc(c)}</button>`).join('')}</div>` : '';
     return `
+      ${pendingBanner}
       <div class="page-title"><h2>副本</h2><p class="muted">${ended ? (p.failed ? `本次副本失败 · 第 ${p.chapter} 章` : `副本已结束 · 第 ${p.chapter} 章`) : `正在进行 · 第 ${p.chapter} 章`}</p></div>
       <section class="panel glass">
         <h3 class="panel-title">事件进度</h3>
@@ -706,6 +718,7 @@ function renderDungeonPage(st) {
       ${renderDungeonSummary(st)}`;
   }
   return `
+    ${pendingBanner}
     <div class="page-title"><h2>副本</h2><p class="muted">深入未知，寻找宝藏</p></div>
     <section class="panel glass">
       <h3 class="panel-title">选择章节</h3>
@@ -980,6 +993,7 @@ async function dungeonEvent(choice) {
         ${renderDungeonActions(finish)}
       </div></section>`;
     playBattleReplay(d);
+    if (d.random_event) { pendingRandomEvent = d.random_event; showRandomEventCard(d.random_event); }
   } catch (e) { toast(e.message, true); }
 }
 
@@ -1102,7 +1116,47 @@ async function dungeonSettle() {
       </section>
       <section class="panel glass"><h3 class="panel-title">战斗战报</h3>${battles || '<p class="empty-tip">本局没有战斗记录</p>'}</section>
       <div class="dungeon-actions"><button class="primary" data-action="nav" data-view="dungeon">返回副本</button></div>`;
+    if (d.random_event) { pendingRandomEvent = d.random_event; showRandomEventCard(d.random_event); }
     rpg.dungeon = null;
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ================================================================
+ * RPG —— 随机事件（P2）：触发弹卡 / 选择结算
+ * ================================================================ */
+function showRandomEventCard(ev) {
+  if (!ev) return;
+  openModal(`
+    <div class="event-card">
+      <div class="event-ico">✨</div>
+      <h3 class="panel-title">随机事件 · ${esc(ev.title)}</h3>
+      <p class="muted">${esc(ev.desc)}</p>
+      <div class="event-choices">
+        ${ev.choices.map((c, i) => `<button class="choice" data-action="rpg-event-choose" data-choice="${i + 1}">${esc(c)}</button>`).join('')}
+      </div>
+    </div>
+  `);
+}
+async function chooseRandomEvent(choice) {
+  const ev = pendingRandomEvent;
+  if (!ev) { closeModal(); return; }
+  try {
+    const d = await api('/api/rpg/events/choose', { method: 'POST', body: { event_id: ev.id, choice } });
+    closeModal();
+    pendingRandomEvent = null;
+    rpg.char = d.character;
+    rpg.gold = d.gold;
+    rpg.backpack = d.backpack;
+    updateGold();
+    const parts = [];
+    if (d.gold > 0) parts.push(`🪙 +${d.gold} 金币`);
+    else if (d.gold < 0) parts.push(`🪙 ${d.gold} 金币`);
+    if (d.hp > 0) parts.push(`❤️ +${d.hp} 生命`);
+    else if (d.hp < 0) parts.push(`💔 ${d.hp} 生命`);
+    (d.items || []).forEach(x => parts.push(`📦 ${x}`));
+    (d.log || []).forEach(x => parts.push(x));
+    toast(parts.join('，'), false);
+    if (rpg.char) rpg.char.cur_hp = d.character.cur_hp;
   } catch (e) { toast(e.message, true); }
 }
 

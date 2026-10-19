@@ -156,6 +156,12 @@ db.exec(`
     claimed_at INTEGER NOT NULL,
     PRIMARY KEY (user_id, date, slot)
   );
+  /* 随机事件（P2）：玩家当前待处理事件，选择后清除，同时刻至多 1 个 */
+  CREATE TABLE IF NOT EXISTS pending_events (
+    user_id INTEGER PRIMARY KEY,
+    event_id TEXT NOT NULL,
+    created INTEGER NOT NULL
+  );
 `);
 
 /* player 自动药水配置迁移（第 5 节：可关闭 / 改阈值 / 改次数） */
@@ -195,6 +201,128 @@ const DAILY_TASK_POOL = [
   { type:'shop', target:'商店购买', amount:3, reward_gold:220, reward_items:[{ name:'精制皮革', type:'material', quantity:1 }] }
 ];
 const DAILY_TASK_TYPE_CN = { clear:'通关副本', kill:'击杀敌人', forge:'制作物品', shop:'商店购买' };
+
+/* ========== 随机事件（P2）：事件池 / 触发后写入 pending_events，选择后清除 ==========
+ * 选项效果 effects（顺序执行）：
+ *   { type:'gold', amount }          金币增减（负数为扣除，不足时清零）
+ *   { type:'hp', amount }            生命增减（负数为受伤，最低 1；恢复不超过上限）
+ *   { type:'item', name,type,quality,stats,quantity }  物品入包
+ *   { type:'equip', text }           从当前章节装备池 roll 一件装备
+ *   { type:'nothing', text }         无事发生（仅日志文案）
+ *   { type:'branch', text, branches:[{pct,text,effects}] }  概率随机分支
+ * 选项可选 cost 字段：用于「购买」类选项，金币不足时接口返回 400 */
+const RANDOM_EVENTS = [
+  {
+    id: 'roadside_chest', title: '路边宝箱', desc: '旅途中发现一只落满灰尘的宝箱，锁扣已经锈蚀。',
+    choices: [
+      { label: '谨慎开箱', effects: [
+        { type: 'branch', text: '你缓缓掀开箱盖…', branches: [
+          { pct: 0.6, text: '里面竟是一袋沉甸甸的金币！', effects: [{ type: 'gold', amount: 60 }] },
+          { pct: 0.4, text: '触发了暗弩机关，你被射中受伤。', effects: [{ type: 'hp', amount: -20 }] }
+        ] }
+      ] },
+      { label: '无视离开', effects: [{ type: 'nothing', text: '你摇摇头继续赶路，与宝藏无缘。' }] }
+    ]
+  },
+  {
+    id: 'mystery_merchant', title: '神秘商人', desc: '兜帽商人拦住你，掀开斗篷露出几件泛光的货物。',
+    choices: [
+      { label: '购买「精制皮革」（40 金币）', cost: 40, effects: [
+        { type: 'gold', amount: -40 },
+        { type: 'item', name: '精制皮革', item_type: 'material', quality: 'normal', quantity: 2 },
+        { type: 'nothing', text: '商人递过皮革，你付了 40 金币。' }
+      ] },
+      { label: '购买「小型药水」（30 金币）', cost: 30, effects: [
+        { type: 'gold', amount: -30 },
+        { type: 'item', name: '小型药水', type: 'consumable', quality: 'normal', stats: { heal_pct: 30 }, quantity: 1 },
+        { type: 'nothing', text: '一瓶泛着微光的药水到手，你花了 30 金币。' }
+      ] },
+      { label: '摇头离开', effects: [{ type: 'nothing', text: '商人不以为意，很快消失在路旁。' }] }
+    ]
+  },
+  {
+    id: 'thorn_trap', title: '荆棘陷阱', desc: '前方草丛中隐约露出尖锐的捕兽夹，铁齿泛着寒光。',
+    choices: [
+      { label: '小心绕行', effects: [
+        { type: 'branch', text: '你蹑手蹑脚地绕行…', branches: [
+          { pct: 0.75, text: '有惊无险，你顺利通过。', effects: [{ type: 'nothing', text: '' }] },
+          { pct: 0.25, text: '一脚踩空，捕兽夹咬住你的小腿！', effects: [{ type: 'hp', amount: -25 }] }
+        ] }
+      ] },
+      { label: '强行通过', effects: [
+        { type: 'hp', amount: -30 },
+        { type: 'nothing', text: '你莽撞地冲过去，被夹了个正着。' }
+      ] }
+    ]
+  },
+  {
+    id: 'ruin_discovery', title: '遗迹发现', desc: '断壁残垣之下，一柄锈蚀的长剑半埋在土中。',
+    choices: [
+      { label: '仔细挖掘', effects: [{ type: 'equip', text: '你掘出武器，拂去尘土后寒光乍现！' }] },
+      { label: '搜刮残骸', effects: [{ type: 'gold', amount: 35 }, { type: 'nothing', text: '你在碎石间摸出一小袋金币。' }] }
+    ]
+  },
+  {
+    id: 'traveler_help', title: '旅人求助', desc: '一位疲惫的旅人拦住你，请求分些干粮与盘缠。',
+    choices: [
+      { label: '慷慨相助（-15 金币）', cost: 15, effects: [
+        { type: 'gold', amount: -15 },
+        { type: 'item', name: '粗糙皮革', item_type: 'material', quality: 'normal', quantity: 1 },
+        { type: 'hp', amount: 10 },
+        { type: 'nothing', text: '旅人感激不尽，赠你皮革并为你包扎了伤口。' }
+      ] },
+      { label: '婉言拒绝', effects: [{ type: 'nothing', text: '旅人叹了口气，转身离去。' }] }
+    ]
+  },
+  {
+    id: 'weather_omen', title: '天气异象', desc: '天空骤然暗沉，雷云在头顶翻滚聚拢。',
+    choices: [
+      { label: '原地躲避', effects: [{ type: 'nothing', text: '你躲进岩缝，等雷雨过去。' }] },
+      { label: '冒雨赶路', effects: [
+        { type: 'branch', text: '你顶着风雨前行…', branches: [
+          { pct: 0.6, text: '雨水冲出一片矿脉，你捡到两块黑铁矿！', effects: [{ type: 'item', name: '黑铁矿', item_type: 'material', quality: 'normal', quantity: 2 }] },
+          { pct: 0.4, text: '一道惊雷劈下，你被震得浑身发麻。', effects: [{ type: 'hp', amount: -20 }] }
+        ] }
+      ] }
+    ]
+  },
+  {
+    id: 'mystic_spring', title: '神秘泉水', desc: '林间石缝中涌出一泓幽蓝清泉，水光潋滟。',
+    choices: [
+      { label: '饮下泉水', effects: [{ type: 'hp', amount: 40 }, { type: 'nothing', text: '泉水入喉，暖流涌遍全身。' }] },
+      { label: '装满一瓶', effects: [
+        { type: 'item', name: '神秘泉水', type: 'consumable', quality: 'fine', stats: { heal_pct: 50 }, quantity: 1 },
+        { type: 'nothing', text: '你装了一瓶幽蓝泉水带走。' }
+      ] },
+      { label: '泼洒测试', effects: [{ type: 'nothing', text: '泉水落地后迅速渗入泥土，并无异样。' }] }
+    ]
+  },
+  {
+    id: 'lost_elder', title: '迷途老者', desc: '白发老者拉住你问路，却怎么也说不清要去的地方。',
+    choices: [
+      { label: '耐心指引', effects: [{ type: 'gold', amount: 25 }, { type: 'nothing', text: '老者恍然大悟，硬塞给你 25 金币作谢礼。' }] },
+      { label: '打听宝藏', effects: [{ type: 'item', name: '猎人旧地图', item_type: 'quest', quality: 'normal', quantity: 1 }, { type: 'nothing', text: '老者低声透露了一处宝藏的位置。' }] }
+    ]
+  },
+  {
+    id: 'abandoned_camp', title: '废弃营帐', desc: '路边立着一座废弃营帐，篝火早已熄灭。',
+    choices: [
+      { label: '翻找行囊', effects: [{ type: 'item', name: '精炼黑铁', item_type: 'material', quality: 'normal', quantity: 1 }, { type: 'nothing', text: '你在行囊底翻出一块精炼黑铁。' }] },
+      { label: '烧毁营帐', effects: [{ type: 'nothing', text: '火焰腾起，营帐化为灰烬，无事发生。' }] }
+    ]
+  },
+  {
+    id: 'mist_whisper', title: '黑雾低语', desc: '一缕黑雾在路边盘旋，隐约传来低语声。',
+    choices: [
+      { label: '侧耳聆听', effects: [
+        { type: 'item', name: '净化碎片', item_type: 'material', quality: 'normal', quantity: 1 },
+        { type: 'hp', amount: -10 },
+        { type: 'nothing', text: '低语侵蚀心神，但碎片遗落在地，你捡了起来。' }
+      ] },
+      { label: '快步离开', effects: [{ type: 'nothing', text: '你加快脚步，将低语甩在身后。' }] }
+    ]
+  }
+];
 function hashSeed(str){ let h = 0; for(let i = 0; i < str.length; i++){ h = (h * 31 + str.charCodeAt(i)) >>> 0; } return h >>> 0; }
 function mulberry32(seed){ let a = seed >>> 0; return function(){ a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 /* 按日期种子每天固定选取 3 个不同类型任务，当天全服一致 */
@@ -849,6 +977,90 @@ async function handleDailyTaskClaim(req, res, u){
   return out(res, 200, { ok: true, slot: row.slot, rewards, gold: p.gold, character: buildCharacter(u.id) });
 }
 
+/* ========== 随机事件（P2）：触发 / 查询 / 选择结算 ========== */
+function randomEventPayload(ev){
+  return { id: ev.id, title: ev.title, desc: ev.desc, choices: ev.choices.map(c => c.label) };
+}
+function pendingEventOf(userId){
+  const row = get('SELECT * FROM pending_events WHERE user_id=?', userId);
+  if(!row) return null;
+  const ev = RANDOM_EVENTS.find(e => e.id === row.event_id);
+  if(!ev) return null;
+  return { row, ev };
+}
+/* 战斗胜利 / 副本通关后 20% 触发；已有待处理事件时不重复触发，同时刻至多 1 个 */
+function maybeTriggerRandomEvent(userId){
+  if(get('SELECT user_id FROM pending_events WHERE user_id=?', userId)) return null;
+  if(!rollPct(0.20)) return null;
+  const ev = RANDOM_EVENTS[randInt(0, RANDOM_EVENTS.length - 1)];
+  stmt('INSERT INTO pending_events(user_id,event_id,created) VALUES(?,?,?)', userId, ev.id, now());
+  return randomEventPayload(ev);
+}
+/* 结算选项效果：金币 / 生命 / 物品 / 装备 / 概率分支；写库并返回明细 */
+function applyRandomEventEffects(p, ev, choiceIdx){
+  const choice = ev.choices[choiceIdx];
+  if(choice.cost != null && p.gold < choice.cost){
+    const e = new Error('金币不足，无法选择该选项');
+    e.status = 400; throw e;
+  }
+  const res = { gold: 0, hp: 0, items: [], log: [] };
+  const run = (fx) => {
+    for(const e of fx || []){
+      if(e.type === 'gold'){
+        p.gold += e.amount;
+        if(p.gold < 0) p.gold = 0;
+        res.gold += e.amount;
+      } else if(e.type === 'hp'){
+        const before = p.cur_hp;
+        p.cur_hp = Math.max(1, Math.min(p.max_hp, p.cur_hp + e.amount));
+        res.hp += p.cur_hp - before;
+      } else if(e.type === 'item'){
+        addItem(p.user_id, e.name, e.item_type || 'material', e.quality || 'normal', e.stats || {}, 'backpack', e.quantity || 1);
+        res.items.push(e.name + '×' + (e.quantity || 1));
+      } else if(e.type === 'equip'){
+        const cfg = CHAPTER_CONFIG[p.chapter || 1] || CHAPTER_CONFIG[1];
+        const proto = cfg.equip[randInt(0, cfg.equip.length - 1)];
+        const q = rollDropQuality('normal', 0, 0) || 'normal';
+        addItem(p.user_id, proto.name, proto.type, q, proto.stats, 'backpack', 1);
+        res.items.push(proto.name + '（' + q + '）');
+      } else if(e.type === 'nothing'){
+        if(e.text) res.log.push(e.text);
+      } else if(e.type === 'branch'){
+        let r = Math.random(), acc = 0, picked = null;
+        for(const b of e.branches || []){ acc += b.pct; if(r < acc){ picked = b; break; } }
+        if(picked){ run(picked.effects); if(picked.text) res.log.push(picked.text); }
+      }
+    }
+  };
+  run(choice.effects);
+  stmt('UPDATE player SET gold=?, cur_hp=? WHERE user_id=?', p.gold, p.cur_hp, p.user_id);
+  return res;
+}
+/* GET /api/rpg/events：查询当前是否有待处理事件 */
+function handleRandomEvents(req, res, u){
+  const pe = pendingEventOf(u.id);
+  if(!pe) return out(res, 200, { event: null });
+  return out(res, 200, { event: randomEventPayload(pe.ev) });
+}
+/* POST /api/rpg/events/choose：校验事件存在且未处理，结算并清除 */
+async function handleRandomEventChoose(req, res, u){
+  const b = await body(req);
+  const p = getPlayer(u.id);
+  if(!p) return out(res, 404, { error: '尚未创建角色' });
+  const pe = pendingEventOf(u.id);
+  if(!pe) return out(res, 400, { error: '当前没有待处理事件' });
+  if(String(b.event_id || '') !== pe.ev.id) return out(res, 400, { error: '事件不匹配或已处理' });
+  const choice = Number(b.choice);
+  if(!Number.isInteger(choice) || choice < 1 || choice > pe.ev.choices.length) return out(res, 400, { error: '选项无效' });
+  const result = applyRandomEventEffects(p, pe.ev, choice - 1);
+  stmt('DELETE FROM pending_events WHERE user_id=?', u.id);
+  return out(res, 200, {
+    ok: true, event_id: pe.ev.id, ...result,
+    gold: p.gold, cur_hp: p.cur_hp,
+    character: buildCharacter(u.id), backpack: buildBackpack(u.id)
+  });
+}
+
 /* 发放奖励：金币直接入账；材料/装备直接入包；装备箱按 box 掉落表 roll 一件装备（与商店开箱一致） */
 function grantGoalReward(userId, goal, p){
   const rewards = [];
@@ -1301,7 +1513,8 @@ async function handleDungeonEvent(req, res, u){
       }
       s.idx++;
       const done = s.idx >= s.events.length;
-      return out(res, 200, { ok: true, win: true, monster: ev.monster, tier: ev.tier, exp: rewards.exp, gold: rewards.gold, drops: rewards.drops, healUsed: battle.healUsed, cur_hp: ups > 0 ? p.cur_hp : battle.curHp, level: p.level, log: battle.log, hpTrace: battle.hpTrace, playerName: u.display_name || u.username, remaining_events: s.events.length - s.idx, finished: done });
+      const rnd = maybeTriggerRandomEvent(u.id);
+      return out(res, 200, { ok: true, win: true, monster: ev.monster, tier: ev.tier, exp: rewards.exp, gold: rewards.gold, drops: rewards.drops, healUsed: battle.healUsed, cur_hp: ups > 0 ? p.cur_hp : battle.curHp, level: p.level, log: battle.log, hpTrace: battle.hpTrace, playerName: u.display_name || u.username, remaining_events: s.events.length - s.idx, finished: done, random_event: rnd });
     }
     const lossRate = raceFailGoldLoss(p.race);
     const loss = Math.floor(p.gold * lossRate);
@@ -1333,10 +1546,12 @@ function handleDungeonSettle(req, res, u){
   }
   const completedEvents = Math.min(s.idx, s.events.length);
   recordDungeonRun(u.id, s.chapter, !s.failed && completedEvents >= s.events.length);
+  const rnd = (!s.failed && completedEvents >= s.events.length) ? maybeTriggerRandomEvent(u.id) : null;
   return out(res, 200, {
     ok: true, chapter: s.chapter, total_events: s.events.length, completed_events: completedEvents,
     boss_killed: s.bossKilled, failed: s.failed, failed_at: s.failedAt, exp: s.exp, gold: s.gold,
-    drops: s.drops, potions_used: s.potionsUsed, old_map_used: s.oldMap, battles: s.battleLogs
+    drops: s.drops, potions_used: s.potionsUsed, old_map_used: s.oldMap, battles: s.battleLogs,
+    random_event: rnd
   });
 }
 
@@ -1630,6 +1845,10 @@ async function handleMarketCancel(req, res, u){
     /* ========== 阶段2.6：每日任务接口（第 9 节 P1） ========== */
     if(path === '/api/rpg/daily-tasks' && method === 'GET') return await handleDailyTasks(req, res, u);
     if(path === '/api/rpg/daily-tasks/claim' && method === 'POST') return await handleDailyTaskClaim(req, res, u);
+
+    /* ========== 阶段2.7：随机事件接口（第 10 节 P2） ========== */
+    if(path === '/api/rpg/events' && method === 'GET') return handleRandomEvents(req, res, u);
+    if(path === '/api/rpg/events/choose' && method === 'POST') return await handleRandomEventChoose(req, res, u);
 
     /* ========== 阶段3：铁匠铺 / 商店 / 交易行接口（第 7 节） ========== */
     if(path === '/api/rpg/forge/catalog' && method === 'GET') return out(res, 200, forgeCatalog(u.id));
