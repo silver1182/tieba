@@ -130,6 +130,32 @@ db.exec(`
     completed_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_dungeon_runs_user ON dungeon_runs(user_id, chapter, win);
+  /* 每日任务（P1）：当日任务定义 / 当日增量计数 / 领取记录 */
+  CREATE TABLE IF NOT EXISTS daily_tasks (
+    date TEXT NOT NULL,
+    slot INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    target TEXT NOT NULL DEFAULT '',
+    amount INTEGER NOT NULL DEFAULT 1,
+    reward_gold INTEGER NOT NULL DEFAULT 0,
+    reward_items TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY (date, slot)
+  );
+  CREATE TABLE IF NOT EXISTS daily_counts (
+    user_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    target TEXT NOT NULL DEFAULT '',
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, date, kind, target)
+  );
+  CREATE TABLE IF NOT EXISTS daily_task_claims (
+    user_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    slot INTEGER NOT NULL,
+    claimed_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, date, slot)
+  );
 `);
 
 /* player 自动药水配置迁移（第 5 节：可关闭 / 改阈值 / 改次数） */
@@ -153,6 +179,47 @@ const ITEM_QUALITY_MULT = { normal:1.00, fine:1.20, superb:1.45, rare:1.75 };
 
 /* ========== 阶段2：副本与战斗配置（第 3/4/6 节） ========== */
 const DUNGEON_DAILY_LIMIT = 5;
+
+/* ========== 每日任务（P1）：任务池 / 日期种子固定选取 ========== */
+const DAILY_TASK_POOL = [
+  { type:'clear', target:'任意副本', amount:2, reward_gold:200, reward_items:[] },
+  { type:'clear', target:'任意副本', amount:1, reward_gold:150, reward_items:[{ name:'净化碎片', type:'material', quantity:2 }] },
+  { type:'kill', target:'灰牙野狼', amount:10, reward_gold:150, reward_items:[{ name:'粗糙皮革', type:'material', quantity:2 }] },
+  { type:'kill', target:'腐木妖', amount:8, reward_gold:160, reward_items:[] },
+  { type:'kill', target:'黑斑巨狼', amount:3, reward_gold:220, reward_items:[{ box:true }] },
+  { type:'kill', target:'矿坑蝙蝠', amount:10, reward_gold:180, reward_items:[{ name:'黑铁矿', type:'material', quantity:2 }] },
+  { type:'kill', target:'黑铁傀儡', amount:6, reward_gold:240, reward_items:[{ box:true }] },
+  { type:'forge', target:'铁匠铺制作', amount:3, reward_gold:180, reward_items:[{ name:'精炼黑铁', type:'material', quantity:1 }] },
+  { type:'forge', target:'铁匠铺制作', amount:5, reward_gold:300, reward_items:[{ box:true }] },
+  { type:'shop', target:'商店购买', amount:2, reward_gold:120, reward_items:[] },
+  { type:'shop', target:'商店购买', amount:3, reward_gold:220, reward_items:[{ name:'精制皮革', type:'material', quantity:1 }] }
+];
+const DAILY_TASK_TYPE_CN = { clear:'通关副本', kill:'击杀敌人', forge:'制作物品', shop:'商店购买' };
+function hashSeed(str){ let h = 0; for(let i = 0; i < str.length; i++){ h = (h * 31 + str.charCodeAt(i)) >>> 0; } return h >>> 0; }
+function mulberry32(seed){ let a = seed >>> 0; return function(){ a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+/* 按日期种子每天固定选取 3 个不同类型任务，当天全服一致 */
+function pickDailyTasks(dateStr){
+  const rnd = mulberry32(hashSeed('daily:' + dateStr));
+  const byType = {};
+  for(const t of DAILY_TASK_POOL){ (byType[t.type] = byType[t.type] || []).push(t); }
+  const types = Object.keys(byType);
+  for(let i = types.length - 1; i > 0; i--){ const j = Math.floor(rnd() * (i + 1)); [types[i], types[j]] = [types[j], types[i]]; }
+  return types.slice(0, Math.min(3, types.length)).map(type => {
+    const pool = byType[type].slice();
+    for(let i = pool.length - 1; i > 0; i--){ const j = Math.floor(rnd() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+    return pool[0];
+  });
+}
+/* 确保当天任务已生成（幂等；跨日自然日 0 点后再次请求即生成新一天任务） */
+function ensureDailyTasks(dateStr){
+  const exists = get('SELECT date FROM daily_tasks WHERE date=? LIMIT 1', dateStr);
+  if(exists) return;
+  const picked = pickDailyTasks(dateStr);
+  picked.forEach((t, i) => {
+    stmt('INSERT INTO daily_tasks(date,slot,type,target,amount,reward_gold,reward_items) VALUES(?,?,?,?,?,?,?)',
+      dateStr, i + 1, t.type, t.target, t.amount, t.reward_gold, JSON.stringify(t.reward_items || []));
+  });
+}
 const MAX_BATTLE_TURNS = 80;
 const QUALITY_ORDER = ['normal', 'fine', 'superb', 'rare'];
 
@@ -675,6 +742,7 @@ function hasAndConsumeOldMap(userId){
 /* ========== 章节目标（P0）：动态统计 / 领取（第 8 节） ========== */
 function recordMonsterKill(userId, monster){
   stmt('INSERT INTO monster_kills(user_id,monster,count) VALUES(?,?,1) ON CONFLICT(user_id,monster) DO UPDATE SET count=count+1', userId, monster);
+  dailyCountInc(userId, 'kill', monster, 1);
 }
 function recordEncounter(userId, encounter){
   stmt('INSERT INTO encounter_log(user_id,encounter,count) VALUES(?,?,1) ON CONFLICT(user_id,encounter) DO UPDATE SET count=count+1', userId, encounter);
@@ -724,6 +792,63 @@ function listChapterGoals(userId, chapter){
     : all('SELECT * FROM chapter_goals ORDER BY chapter,sort,id');
   return rows.map(r => goalPayload(userId, r));
 }
+/* ========== 每日任务（P1）：当日增量计数 / 进度统计 / 领取（第 9 节） ========== */
+function dailyCountInc(userId, kind, target, qty){
+  const today = localDateStr();
+  stmt('INSERT INTO daily_counts(user_id,date,kind,target,count) VALUES(?,?,?,?,?) ON CONFLICT(user_id,date,kind,target) DO UPDATE SET count=count+excluded.count',
+    userId, today, kind, target || '', qty || 1);
+}
+function dayStartMs(dateStr){ const parts = dateStr.split('-').map(Number); return new Date(parts[0], parts[1] - 1, parts[2], 0, 0, 0, 0).getTime(); }
+/* 每日任务进度：clear 动态统计当日通关；kill/forge/shop 用当日增量计数表 */
+function dailyProgressOf(userId, task){
+  const today = localDateStr();
+  if(task.type === 'clear'){
+    const r = get('SELECT COUNT(*) AS c FROM dungeon_runs WHERE user_id=? AND win=1 AND completed_at>=?', userId, dayStartMs(today));
+    return Number(r.c) || 0;
+  }
+  if(task.type === 'kill'){
+    const r = get('SELECT COALESCE(SUM(count),0) AS c FROM daily_counts WHERE user_id=? AND date=? AND kind=? AND target=?', userId, today, 'kill', task.target);
+    return Number(r.c) || 0;
+  }
+  if(task.type === 'forge' || task.type === 'shop'){
+    const r = get('SELECT COALESCE(SUM(count),0) AS c FROM daily_counts WHERE user_id=? AND date=? AND kind=?', userId, today, task.type);
+    return Number(r.c) || 0;
+  }
+  return 0;
+}
+function dailyPayload(userId, row){
+  const g = { slot: row.slot, date: row.date, type: row.type, type_cn: DAILY_TASK_TYPE_CN[row.type] || row.type, target: row.target, amount: row.amount, reward: { gold: row.reward_gold, items: safeJson(row.reward_items, []) } };
+  g.progress = dailyProgressOf(userId, g);
+  g.done = g.progress >= g.amount;
+  g.claimed = !!get('SELECT user_id FROM daily_task_claims WHERE user_id=? AND date=? AND slot=?', userId, row.date, row.slot);
+  g.claimable = g.done && !g.claimed;
+  return g;
+}
+async function handleDailyTasks(req, res, u){
+  const p = getPlayer(u.id);
+  if(!p) return out(res, 404, { error: '尚未创建角色' });
+  const today = localDateStr();
+  ensureDailyTasks(today);
+  const rows = all('SELECT * FROM daily_tasks WHERE date=? ORDER BY slot', today);
+  return out(res, 200, { date: today, tasks: rows.map(r => dailyPayload(u.id, r)) });
+}
+async function handleDailyTaskClaim(req, res, u){
+  const b = await body(req);
+  const p = getPlayer(u.id);
+  if(!p) return out(res, 404, { error: '尚未创建角色' });
+  const today = localDateStr();
+  ensureDailyTasks(today);
+  const slot = Number(b.slot) || 0;
+  const row = get('SELECT * FROM daily_tasks WHERE date=? AND slot=?', today, slot);
+  if(!row) return out(res, 404, { error: '任务不存在' });
+  const payload = dailyPayload(u.id, row);
+  if(payload.claimed) return out(res, 400, { error: '该任务奖励已领取' });
+  if(!payload.done) return out(res, 400, { error: '任务尚未完成' });
+  const rewards = grantGoalReward(u.id, { chapter: 1, reward_gold: row.reward_gold, reward_items: row.reward_items }, p);
+  stmt('INSERT INTO daily_task_claims(user_id,date,slot,claimed_at) VALUES(?,?,?,?)', u.id, today, slot, now());
+  return out(res, 200, { ok: true, slot: row.slot, rewards, gold: p.gold, character: buildCharacter(u.id) });
+}
+
 /* 发放奖励：金币直接入账；材料/装备直接入包；装备箱按 box 掉落表 roll 一件装备（与商店开箱一致） */
 function grantGoalReward(userId, goal, p){
   const rewards = [];
@@ -1338,6 +1463,7 @@ async function handleForgeMaterial(req, res, u){
   p.gold -= totalCost;
   stmt('UPDATE player SET gold=? WHERE user_id=?', p.gold, u.id);
   addItem(u.id, b.recipe, 'material', 'normal', {}, 'backpack', quantity);
+  dailyCountInc(u.id, 'forge', '', quantity);
   return out(res, 201, { ok: true, name: b.recipe, type: 'material', quality: 'normal', quantity, cost: totalCost, gold: p.gold });
 }
 async function handleForgePotion(req, res, u){
@@ -1353,6 +1479,7 @@ async function handleForgePotion(req, res, u){
   p.gold -= totalCost;
   stmt('UPDATE player SET gold=? WHERE user_id=?', p.gold, u.id);
   addItem(u.id, b.recipe, 'consumable', 'normal', POTION_ITEMS[b.recipe] || {}, 'backpack', quantity);
+  dailyCountInc(u.id, 'forge', '', quantity);
   return out(res, 201, { ok: true, name: b.recipe, type: 'consumable', quality: 'normal', quantity, cost: totalCost, gold: p.gold });
 }
 async function handleForgeEquip(req, res, u){
@@ -1402,6 +1529,7 @@ async function handleShopBuy(req, res, u){
     const proto = CHAPTER_CONFIG[1].equip[randInt(0, CHAPTER_CONFIG[1].equip.length - 1)];
     const q = rollDropQuality('box', 0, 0) || 'normal';
     addItem(u.id, proto.name, proto.type, q, proto.stats, 'backpack', 1);
+    dailyCountInc(u.id, 'shop', '', 1);
     return out(res, 201, { ok: true, box: true, name: proto.name, type: proto.type, quality: q, quantity: 1, stats: proto.stats, cost: item.price, gold: p.gold });
   }
   const total = item.price * quantity;
@@ -1411,6 +1539,7 @@ async function handleShopBuy(req, res, u){
   if(item.type === 'consumable') addItem(u.id, b.item, 'consumable', 'normal', item.stats || {}, 'backpack', quantity);
   else if(item.type === 'material') addItem(u.id, b.item, 'material', 'normal', {}, 'backpack', quantity);
   else return out(res, 400, { error: '未知商品类型' });
+  dailyCountInc(u.id, 'shop', '', quantity);
   return out(res, 201, { ok: true, name: b.item, type: item.type, quantity, cost: total, gold: p.gold });
 }
 function orderToPayload(row){
@@ -1497,6 +1626,10 @@ async function handleMarketCancel(req, res, u){
     /* ========== 阶段2.5：章节目标接口（第 8 节 P0） ========== */
     if(path === '/api/rpg/goals' && method === 'GET') return await handleChapterGoals(req, res, u);
     if(path === '/api/rpg/goals/claim' && method === 'POST') return await handleGoalClaim(req, res, u);
+
+    /* ========== 阶段2.6：每日任务接口（第 9 节 P1） ========== */
+    if(path === '/api/rpg/daily-tasks' && method === 'GET') return await handleDailyTasks(req, res, u);
+    if(path === '/api/rpg/daily-tasks/claim' && method === 'POST') return await handleDailyTaskClaim(req, res, u);
 
     /* ========== 阶段3：铁匠铺 / 商店 / 交易行接口（第 7 节） ========== */
     if(path === '/api/rpg/forge/catalog' && method === 'GET') return out(res, 200, forgeCatalog(u.id));

@@ -158,6 +158,7 @@ document.addEventListener('click', async e => {
   else if (a === 'dungeon-event') dungeonEvent(el.dataset.choice || '');
   else if (a === 'dungeon-settle') dungeonSettle();
   else if (a === 'goal-claim') claimGoal(Number(el.dataset.id));
+  else if (a === 'daily-claim') claimDailyTask(Number(el.dataset.slot));
   else if (a === 'dungeon-info') showDungeonInfo(el.dataset.chapter);
   else if (a === 'save-settings') saveDungeonSettings();
   else if (a === 'shop-tab') { currentShopTab = el.dataset.tab; renderShopList(); }
@@ -477,7 +478,9 @@ async function viewCharacter() {
     updateGold();
     let st = null;
     try { st = await api('/api/rpg/dungeon/status'); rpg.dungeon = st; } catch {}
-    $('#view').innerHTML = renderCharacter(d.character, st);
+    let dt = null;
+    try { dt = await api('/api/rpg/daily-tasks'); rpg.daily = dt; } catch {}
+    $('#view').innerHTML = renderCharacter(d.character, st, dt);
   } catch (e) {
     rpg.char = null;
     if (/尚未创建角色/.test(e.message)) $('#view').innerHTML = renderCharacterCreate();
@@ -510,7 +513,7 @@ async function createCharacter(race) {
   } catch (e) { toast(e.message, true); }
 }
 
-function renderCharacter(c, st) {
+function renderCharacter(c, st, dt) {
   const hpPct = c.max_hp ? Math.round(c.cur_hp / c.max_hp * 100) : 0;
   const race = RACE_INFO[c.race] || { ico: '🎮', tag: '' };
   const slots = [
@@ -568,7 +571,9 @@ function renderCharacter(c, st) {
           </div>`;
         }).join('')}
       </div>
-    </section>`;
+    </section>
+
+    ${renderDailyPanel(dt && dt.tasks)}`;
 }
 
 /* ================================================================
@@ -738,6 +743,51 @@ function renderDungeonPage(st) {
 
 /* ---------- 章节目标（P0） ---------- */
 const GOAL_ICO = { clear: '🏁', kill: '⚔️', encounter: '✨', collect: '🧺', boss: '👑' };
+/* ---------- 每日任务（P1） ---------- */
+const DAILY_ICO = { clear: '🏁', kill: '⚔️', forge: '🔨', shop: '🛒' };
+function renderDailyPanel(tasks) {
+  if (!tasks || !tasks.length) return '';
+  return `<section class="panel glass">
+    <h3 class="panel-title">每日任务 · ${esc(tasks[0].date || '')}</h3>
+    <div class="goal-list">
+      ${tasks.map(t => {
+        const pct = Math.min(100, Math.round(t.progress / t.amount * 100));
+        const btn = t.claimed
+          ? '<span class="goal-claimed">✓ 已领取</span>'
+          : t.claimable
+            ? `<button class="primary small" data-action="daily-claim" data-slot="${t.slot}">领取奖励</button>`
+            : '<span class="goal-locked">进行中</span>';
+        return `<div class="goal-item ${t.done && !t.claimed ? 'ready' : ''}">
+          <div class="goal-head">
+            <span class="goal-ico">${DAILY_ICO[t.type] || '🎯'}</span>
+            <span class="goal-title">${esc(t.type_cn)}：${esc(t.target)}</span>
+            <span class="goal-progress">${t.progress}/${t.amount}</span>
+          </div>
+          <div class="goal-bar"><div class="goal-bar-fill" style="width:${pct}%"></div></div>
+          <div class="goal-foot">
+            <span class="goal-reward">奖励：${esc(goalRewardText(t.reward))}</span>
+            ${btn}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  </section>`;
+}
+async function claimDailyTask(slot) {
+  try {
+    const d = await api('/api/rpg/daily-tasks/claim', { method: 'POST', body: { slot } });
+    rpg.gold = d.gold;
+    rpg.char = d.character;
+    updateGold();
+    const parts = d.rewards.map(r => r.kind === 'gold'
+      ? `金币×${r.quantity}`
+      : r.kind === 'equip_box'
+        ? `装备箱「${r.name}」(${QUALITY_CN[r.quality] || r.quality})`
+        : `${r.name}×${r.quantity}`);
+    toast(`每日任务领取成功：${parts.join('、')}`);
+    viewCharacter();
+  } catch (e) { toast(e.message, true); }
+}
 function goalRewardText(r) {
   const parts = [];
   if (r.gold > 0) parts.push(`金币×${r.gold}`);

@@ -41,6 +41,25 @@ AIGC:
 
 > 以下改动已部署到线上服务器（dontdie-ai.com，systemd + nginx HTTPS），尚未发布正式版本号。
 
+### P1 每日任务系统（2026-10-19）
+
+1. **每日任务生成**
+   - 新增 `daily_tasks` 表（date+slot 主键），服务启动 `CREATE TABLE IF NOT EXISTS` 初始化。
+   - 新增 `DAILY_TASK_POOL` 任务池（通关/击杀/制作/购买 11 种）与日期种子算法（`hashSeed` + `mulberry32`），按本地日期固定选取 3 个不同类型任务，当天全服一致；`ensureDailyTasks` 幂等生成，自然日 0 点后首次请求自动进入新一天。
+
+2. **进度记录与统计**
+   - 新增 `daily_counts`（user_id+date+kind+target 当日增量计数）与 `daily_task_claims`（user_id+date+slot 领取记录）两张表。
+   - `recordMonsterKill` / 铁匠铺（材料/药水/装备锻造）/ 商店（消耗品/材料/装备箱购买）挂接 `dailyCountInc` 当日计数；通关任务复用 `dungeon_runs` 按 `completed_at >= 当日 0 点` 动态统计。
+
+3. **API**
+   - `GET /api/rpg/daily-tasks`：返回当日任务列表与进度（progress / done / claimable / claimed）与奖励。
+   - `POST /api/rpg/daily-tasks/claim`：校验达成、防重复领取（重复返回 400），奖励入账并刷新金币背包。
+
+4. **前端每日任务面板**
+   - 角色页新增「每日任务」面板：任务图标、描述、进度 x/y 与进度条、完成可领取状态与领取按钮；领取后 toast 奖励明细并刷新金币/背包/面板。
+
+- 校验：`node --check server.mjs`、`node --check public/app.js` 通过；隔离冒烟测试（端口 3999 临时库）5 项全部通过（初始进度 0/3 任务类型互异、模拟完成后全部可领取、领取奖励入账金币增加、重复领取 400、跨日重置进度清零）；待部署线上并复验。
+
 ### P0 章节目标系统（2026-10-19）
 
 1. **数据与配置**
