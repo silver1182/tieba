@@ -41,6 +41,25 @@ AIGC:
 
 > 以下改动已部署到线上服务器（dontdie-ai.com，systemd + nginx HTTPS），尚未发布正式版本号。
 
+### P0 章节目标系统（2026-10-19）
+
+1. **数据与配置**
+   - 新增 `chapter_goals`、`goal_claims` 数据表，记录每章 5 个目标定义与玩家领取记录。
+   - 新增 `CHAPTER_GOALS` 配置：目标类型 `clear`（通关）/ `kill`（击杀）/ `encounter`（遭遇）/ `collect`（收集）/ `boss`（Boss 挑战），奖励支持金币、材料、装备箱。
+
+2. **动态进度统计与领取 API**
+   - `GET /api/rpg/goals?chapter=N`：实时统计当前章节各目标进度（击杀数、遭遇数、收集数、Boss 挑战数、通关状态）。
+   - `POST /api/rpg/goals/claim`：按目标领取奖励，服务端校验条件达成并防重复领取（重复领取返回 400）。
+
+3. **前端目标面板**
+   - 目标面板展示每章 5 目标：进度条、达成状态、奖励说明、可领取按钮。
+   - 领取成功后金币背包/材料/装备箱实时同步刷新。
+
+4. **副本结算挂钩**
+   - `recordMonsterKill` / `recordEncounter` / `recordDungeonRun` 挂钩章节目标进度统计。
+
+- 校验：`node --check server.mjs`、`node --check public/app.js` 通过；隔离冒烟测试（端口 3999 临时库）全链路通过（进度统计正确、领取入账、重复领取返回 400）；待部署线上并复验。
+
 ### 静态资源白名单集中化与 PWA manifest 接入、铁匠铺与商店状态完善（2026-10-19）
 
 1. **静态资源白名单集中化与 manifest 接入**

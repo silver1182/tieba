@@ -93,6 +93,43 @@ db.exec(`
     expires_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_market_status ON marketplace(status, expires_at);
+  /* 章节目标（P0）：目标定义 / 领取记录 / 动态统计辅助表 */
+  CREATE TABLE IF NOT EXISTS chapter_goals (
+    id INTEGER PRIMARY KEY,
+    chapter INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    target TEXT NOT NULL DEFAULT '',
+    amount INTEGER NOT NULL DEFAULT 1,
+    reward_gold INTEGER NOT NULL DEFAULT 0,
+    reward_items TEXT NOT NULL DEFAULT '[]',
+    sort INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS goal_claims (
+    user_id INTEGER NOT NULL,
+    goal_id INTEGER NOT NULL,
+    claimed_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, goal_id)
+  );
+  CREATE TABLE IF NOT EXISTS monster_kills (
+    user_id INTEGER NOT NULL,
+    monster TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, monster)
+  );
+  CREATE TABLE IF NOT EXISTS encounter_log (
+    user_id INTEGER NOT NULL,
+    encounter TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, encounter)
+  );
+  CREATE TABLE IF NOT EXISTS dungeon_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    chapter INTEGER NOT NULL,
+    win INTEGER NOT NULL DEFAULT 0,
+    completed_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_dungeon_runs_user ON dungeon_runs(user_id, chapter, win);
 `);
 
 /* player 自动药水配置迁移（第 5 节：可关闭 / 改阈值 / 改次数） */
@@ -167,6 +204,34 @@ const CHAPTER_CONFIG = {
   1: { name:'灰烬森林', normal:['灰牙野狼','腐木妖','林间盗匪'], elite:['黑斑巨狼'], boss:'灰烬狼王', encounters:['采药人','神秘树洞','猎人营地'], equip:CH1_EQUIP, drop:'boss1', normal_mat:['枯木','粗糙皮革'], elite_mat:['黑狼牙'], boss_mat:['黑狼牙','黑狼牙'] },
   2: { name:'沉没矿坑', normal:['矿坑蝙蝠','黑铁傀儡','黑雾祭司'], elite:['黑铁守卫'], boss:'矿坑领主莫拉克', encounters:['被困矿工','黑雾祭坛','地底商人'], equip:CH2_EQUIP, drop:'boss2', normal_mat:['黑铁矿'], elite_mat:['黑铁矿','黑铁矿'], boss_mat:['净化碎片','黑铁矿'] }
 };
+
+/* 章节目标配置（P0，第 8 节）：每章 3~5 个目标
+ * type: clear=通关副本 | kill=击败指定敌人 | encounter=完成遭遇 | collect=收集材料 | boss=击败章节Boss
+ * reward_items: [{name,type,quality,stats,quantity}] 或 [{box:true}]（装备箱=随机装备，按 box 掉落表 roll）
+ */
+const CHAPTER_GOALS = {
+  1: [
+    { id: 1, chapter: 1, type: 'clear', target: '灰烬森林', amount: 1, reward_gold: 60, reward_items: [], sort: 1 },
+    { id: 2, chapter: 1, type: 'kill', target: '灰牙野狼', amount: 3, reward_gold: 0, reward_items: [{ name: '粗糙皮革', type: 'material', quality: 'normal', stats: {}, quantity: 2 }], sort: 2 },
+    { id: 3, chapter: 1, type: 'encounter', target: '神秘树洞', amount: 1, reward_gold: 0, reward_items: [{ name: '猎人护符', type: 'accessory', quality: 'normal', stats: { crit_rate: 5 }, quantity: 1 }], sort: 3 },
+    { id: 4, chapter: 1, type: 'collect', target: '枯木', amount: 5, reward_gold: 0, reward_items: [{ name: '小型药水', type: 'consumable', quality: 'normal', stats: { heal_pct: 30 }, quantity: 2 }], sort: 4 },
+    { id: 5, chapter: 1, type: 'boss', target: '灰烬狼王', amount: 1, reward_gold: 0, reward_items: [{ box: true }], sort: 5 }
+  ],
+  2: [
+    { id: 6, chapter: 2, type: 'clear', target: '沉没矿坑', amount: 1, reward_gold: 100, reward_items: [], sort: 1 },
+    { id: 7, chapter: 2, type: 'kill', target: '黑铁傀儡', amount: 3, reward_gold: 0, reward_items: [{ name: '黑铁矿', type: 'material', quality: 'normal', stats: {}, quantity: 2 }], sort: 2 },
+    { id: 8, chapter: 2, type: 'encounter', target: '黑雾祭坛', amount: 1, reward_gold: 0, reward_items: [{ name: '净化碎片', type: 'material', quality: 'normal', stats: {}, quantity: 1 }], sort: 3 },
+    { id: 9, chapter: 2, type: 'collect', target: '黑铁矿', amount: 5, reward_gold: 0, reward_items: [{ name: '中型药水', type: 'consumable', quality: 'normal', stats: { heal_pct: 50 }, quantity: 1 }], sort: 4 },
+    { id: 10, chapter: 2, type: 'boss', target: '矿坑领主莫拉克', amount: 1, reward_gold: 0, reward_items: [{ box: true }], sort: 5 }
+  ]
+};
+/* 启动时写入目标定义（固定 id，重复启动幂等） */
+{
+  const seedGoals = [];
+  for(const ch of Object.values(CHAPTER_GOALS)) for(const g of ch) seedGoals.push(g);
+  const goalStmt = db.prepare('INSERT OR IGNORE INTO chapter_goals(id,chapter,type,target,amount,reward_gold,reward_items,sort) VALUES(?,?,?,?,?,?,?,?)');
+  for(const g of seedGoals) goalStmt.run(g.id, g.chapter, g.type, g.target, g.amount, g.reward_gold, JSON.stringify(g.reward_items), g.sort);
+}
 
 /* 掉落概率（第 7 节：普通/优良/精良/稀有） */
 const DROP_TABLE = {
@@ -607,6 +672,102 @@ function hasAndConsumeOldMap(userId){
   return true;
 }
 
+/* ========== 章节目标（P0）：动态统计 / 领取（第 8 节） ========== */
+function recordMonsterKill(userId, monster){
+  stmt('INSERT INTO monster_kills(user_id,monster,count) VALUES(?,?,1) ON CONFLICT(user_id,monster) DO UPDATE SET count=count+1', userId, monster);
+}
+function recordEncounter(userId, encounter){
+  stmt('INSERT INTO encounter_log(user_id,encounter,count) VALUES(?,?,1) ON CONFLICT(user_id,encounter) DO UPDATE SET count=count+1', userId, encounter);
+}
+function recordDungeonRun(userId, chapter, win){
+  stmt('INSERT INTO dungeon_runs(user_id,chapter,win,completed_at) VALUES(?,?,?,?)', userId, chapter, win ? 1 : 0, now());
+}
+/* 单目标进度：完全基于现有数据动态统计，不新增采集逻辑 */
+function goalProgressOf(userId, goal){
+  switch(goal.type){
+    case 'clear': {
+      const r = get('SELECT COUNT(*) AS c FROM dungeon_runs WHERE user_id=? AND chapter=? AND win=1', userId, goal.chapter);
+      return Number(r.c) || 0;
+    }
+    case 'kill': {
+      const r = get('SELECT count FROM monster_kills WHERE user_id=? AND monster=?', userId, goal.target);
+      return Number(r && r.count) || 0;
+    }
+    case 'encounter': {
+      const r = get('SELECT count FROM encounter_log WHERE user_id=? AND encounter=?', userId, goal.target);
+      return Number(r && r.count) || 0;
+    }
+    case 'collect': {
+      const r = get('SELECT COALESCE(SUM(quantity),0) AS c FROM items WHERE owner_id=? AND name=? AND type=? AND location=?', userId, goal.target, 'material', 'backpack');
+      return Number(r.c) || 0;
+    }
+    case 'boss': {
+      const p = getPlayer(userId);
+      if(!p) return 0;
+      return goal.chapter === 2 ? p.boss_kills_ch2 : p.boss_kills_ch1;
+    }
+    default: return 0;
+  }
+}
+const GOAL_TYPE_CN = { clear: '通关副本', kill: '击败敌人', encounter: '完成遭遇', collect: '收集材料', boss: '击败Boss' };
+function goalPayload(userId, row){
+  const g = { id: row.id, chapter: row.chapter, type: row.type, type_cn: GOAL_TYPE_CN[row.type] || row.type, target: row.target, amount: row.amount, sort: row.sort, reward: { gold: row.reward_gold, items: safeJson(row.reward_items, []) } };
+  g.progress = goalProgressOf(userId, g);
+  g.done = g.progress >= g.amount;
+  g.claimed = !!get('SELECT user_id FROM goal_claims WHERE user_id=? AND goal_id=?', userId, g.id);
+  g.claimable = g.done && !g.claimed;
+  return g;
+}
+function listChapterGoals(userId, chapter){
+  const rows = chapter
+    ? all('SELECT * FROM chapter_goals WHERE chapter=? ORDER BY sort,id', chapter)
+    : all('SELECT * FROM chapter_goals ORDER BY chapter,sort,id');
+  return rows.map(r => goalPayload(userId, r));
+}
+/* 发放奖励：金币直接入账；材料/装备直接入包；装备箱按 box 掉落表 roll 一件装备（与商店开箱一致） */
+function grantGoalReward(userId, goal, p){
+  const rewards = [];
+  if(goal.reward_gold > 0){
+    p.gold += goal.reward_gold;
+    rewards.push({ kind: 'gold', name: '金币', quantity: goal.reward_gold });
+  }
+  for(const it of safeJson(goal.reward_items, [])){
+    if(it.box){
+      const cfg = CHAPTER_CONFIG[goal.chapter] || CHAPTER_CONFIG[1];
+      const proto = cfg.equip[randInt(0, cfg.equip.length - 1)];
+      const q = rollDropQuality('box', 0, 0) || 'normal';
+      addItem(userId, proto.name, proto.type, q, proto.stats, 'backpack', 1);
+      rewards.push({ kind: 'equip_box', name: proto.name, type: proto.type, quality: q });
+    } else {
+      addItem(userId, it.name, it.type || 'material', it.quality || 'normal', it.stats || {}, 'backpack', it.quantity || 1);
+      rewards.push({ kind: it.type || 'material', name: it.name, quality: it.quality || 'normal', quantity: it.quantity || 1 });
+    }
+  }
+  stmt('UPDATE player SET gold=? WHERE user_id=?', p.gold, userId);
+  return rewards;
+}
+async function handleChapterGoals(req, res, u){
+  const p = getPlayer(u.id);
+  if(!p) return out(res, 404, { error: '尚未创建角色' });
+  const chapter = Number(new URL(req.url, 'http://x').searchParams.get('chapter')) || 0;
+  if(chapter && ![1, 2].includes(chapter)) return out(res, 400, { error: '章节无效' });
+  return out(res, 200, { goals: listChapterGoals(u.id, chapter || null) });
+}
+async function handleGoalClaim(req, res, u){
+  const b = await body(req);
+  const p = getPlayer(u.id);
+  if(!p) return out(res, 404, { error: '尚未创建角色' });
+  const goalId = Number(b.goal_id) || 0;
+  const row = get('SELECT * FROM chapter_goals WHERE id=?', goalId);
+  if(!row) return out(res, 404, { error: '目标不存在' });
+  const payload = goalPayload(u.id, row);
+  if(payload.claimed) return out(res, 400, { error: '该目标奖励已领取' });
+  if(!payload.done) return out(res, 400, { error: '目标尚未完成' });
+  const rewards = grantGoalReward(u.id, row, p);
+  stmt('INSERT INTO goal_claims(user_id,goal_id,claimed_at) VALUES(?,?,?)', u.id, row.id, now());
+  return out(res, 200, { ok: true, goal_id: row.id, rewards, gold: p.gold, character: buildCharacter(u.id) });
+}
+
 /* 掉落品质 roll：tableKey 掉落表 + bonusPct(精灵加成加到普通档) + boost(品质升档，最高稀有) */
 function rollDropQuality(tableKey, bonusPct, boost){
   bonusPct = bonusPct || 0; boost = boost || 0;
@@ -1002,6 +1163,7 @@ async function handleDungeonEvent(req, res, u){
       const ups = applyExpAndLevel(p, rewards.exp);
       p.gold += rewards.gold;
       stmt('UPDATE player SET gold=? WHERE user_id=?', p.gold, u.id);
+      recordMonsterKill(u.id, ev.monster);
       if(ev.tier === 'boss'){
         s.bossKilled = true;
         if(s.chapter === 2){
@@ -1029,6 +1191,7 @@ async function handleDungeonEvent(req, res, u){
   const choice = Number(b.choice) || 1;
   const r = handleEncounter(p, ev, choice, s);
   if (r.gold) s.gold += r.gold;
+  recordEncounter(u.id, ev.name);
   s.idx++;
   const done = s.idx >= s.events.length;
   return out(res, 200, { ok: true, encounter: ev.name, choice, log: r.log, gold: r.gold, hp: r.hp, items: r.items, remaining_events: s.events.length - s.idx, finished: done });
@@ -1043,8 +1206,10 @@ function handleDungeonSettle(req, res, u){
     const fullHp = computeStats(p, getPlayerItems(u.id)).max_hp;
     stmt('UPDATE player SET cur_hp=? WHERE user_id=?', fullHp, u.id);
   }
+  const completedEvents = Math.min(s.idx, s.events.length);
+  recordDungeonRun(u.id, s.chapter, !s.failed && completedEvents >= s.events.length);
   return out(res, 200, {
-    ok: true, chapter: s.chapter, total_events: s.events.length, completed_events: Math.min(s.idx, s.events.length),
+    ok: true, chapter: s.chapter, total_events: s.events.length, completed_events: completedEvents,
     boss_killed: s.bossKilled, failed: s.failed, failed_at: s.failedAt, exp: s.exp, gold: s.gold,
     drops: s.drops, potions_used: s.potionsUsed, old_map_used: s.oldMap, battles: s.battleLogs
   });
@@ -1328,6 +1493,10 @@ async function handleMarketCancel(req, res, u){
     if(path === '/api/rpg/dungeon/status' && method === 'GET') return handleDungeonStatus(req, res, u);
     if(path === '/api/rpg/dungeon/info' && method === 'GET') return handleDungeonInfo(req, res, u);
     if(path === '/api/rpg/dungeon/settings' && method === 'POST') return await handleDungeonSettings(req, res, u);
+
+    /* ========== 阶段2.5：章节目标接口（第 8 节 P0） ========== */
+    if(path === '/api/rpg/goals' && method === 'GET') return await handleChapterGoals(req, res, u);
+    if(path === '/api/rpg/goals/claim' && method === 'POST') return await handleGoalClaim(req, res, u);
 
     /* ========== 阶段3：铁匠铺 / 商店 / 交易行接口（第 7 节） ========== */
     if(path === '/api/rpg/forge/catalog' && method === 'GET') return out(res, 200, forgeCatalog(u.id));

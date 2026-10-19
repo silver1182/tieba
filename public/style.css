@@ -578,3 +578,19 @@ button:disabled,.qty:disabled{opacity:.45;filter:grayscale(.5);cursor:not-allowe
 .battle-log.replay li{opacity:0;animation:logIn .3s ease forwards;padding:2px 10px;border-radius:6px}
 .battle-log.replay li.hit{color:#ffd36b;background:rgba(245,158,11,.08)}
 @keyframes logIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+/* ---- chapter goals ---- */
+.goal-list{display:flex;flex-direction:column;gap:8px}
+.goal-item{padding:10px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:12px}
+.goal-item.ready{border-color:var(--orange);box-shadow:0 0 0 1px rgba(245,158,11,.25)}
+.goal-head{display:flex;align-items:center;gap:8px}
+.goal-ico{font-size:18px}
+.goal-title{flex:1;font-size:13px;font-weight:700;color:var(--text);min-width:0}
+.goal-progress{font-size:13px;font-weight:800;color:var(--orange);white-space:nowrap}
+.goal-bar{height:6px;background:var(--panel3);border-radius:999px;overflow:hidden;margin:6px 0}
+.goal-bar-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#f59e0b,#fbbf24);transition:width .4s ease}
+.goal-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.goal-reward{font-size:12px;color:var(--muted)}
+.goal-locked{font-size:12px;color:var(--muted)}
+.goal-claimed{font-size:12px;color:#34d399;font-weight:700}
+button.primary.small{padding:5px 12px;font-size:12px}

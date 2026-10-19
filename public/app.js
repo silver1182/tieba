@@ -119,7 +119,7 @@ function qualityBadge(q) { return `<span class="q-badge ${QUALITY_CLASS[q] || 'q
 
 /* ---------- 全局状态 ---------- */
 let ME = null;
-let rpg = { char: null, gold: 0, backpack: null, dungeon: null, forge: null, shop: null };
+let rpg = { char: null, gold: 0, backpack: null, dungeon: null, forge: null, shop: null, goals: null };
 let currentBackpackTab = 'equipment';
 let currentForgeTab = 'material';
 let currentShopTab = 'all';
@@ -157,6 +157,7 @@ document.addEventListener('click', async e => {
   else if (a === 'dungeon-start') startDungeon();
   else if (a === 'dungeon-event') dungeonEvent(el.dataset.choice || '');
   else if (a === 'dungeon-settle') dungeonSettle();
+  else if (a === 'goal-claim') claimGoal(Number(el.dataset.id));
   else if (a === 'dungeon-info') showDungeonInfo(el.dataset.chapter);
   else if (a === 'save-settings') saveDungeonSettings();
   else if (a === 'shop-tab') { currentShopTab = el.dataset.tab; renderShopList(); }
@@ -657,8 +658,12 @@ async function viewDungeon() {
   setNav('dungeon');
   $('#view').innerHTML = '<p class="empty-tip">加载中…</p>';
   try {
-    const st = await api('/api/rpg/dungeon/status');
+    const [st, gl] = await Promise.all([
+      api('/api/rpg/dungeon/status'),
+      api('/api/rpg/goals')
+    ]);
     rpg.dungeon = st;
+    rpg.goals = gl.goals || [];
     $('#view').innerHTML = renderDungeonPage(st);
   } catch (e) {
     if (/尚未创建角色/.test(e.message)) { $('#view').innerHTML = `<p class="empty-tip">尚未创建角色，请先前往「角色」页创建。</p>`; }
@@ -692,6 +697,7 @@ function renderDungeonPage(st) {
         <h3 class="panel-title">自动战斗设置</h3>
         ${renderSettingsForm(ap)}
       </section>
+      ${renderGoalsPanel(rpg.goals)}
       ${renderDungeonSummary(st)}`;
   }
   return `
@@ -726,7 +732,68 @@ function renderDungeonPage(st) {
       <h3 class="panel-title">自动战斗设置</h3>
       ${renderSettingsForm(ap)}
     </section>
+    ${renderGoalsPanel(rpg.goals)}
     ${renderDungeonSummary(st)}`;
+}
+
+/* ---------- 章节目标（P0） ---------- */
+const GOAL_ICO = { clear: '🏁', kill: '⚔️', encounter: '✨', collect: '🧺', boss: '👑' };
+function goalRewardText(r) {
+  const parts = [];
+  if (r.gold > 0) parts.push(`金币×${r.gold}`);
+  for (const it of r.items || []) {
+    if (it.box) parts.push('装备箱×1（随机装备）');
+    else parts.push(`${it.name}×${it.quantity || 1}`);
+  }
+  return parts.join('、') || '—';
+}
+function renderGoalsPanel(goals) {
+  if (!goals || !goals.length) return '';
+  return [1, 2].map(ch => {
+    const list = goals.filter(g => g.chapter === ch);
+    if (!list.length) return '';
+    const name = ch === 1 ? '灰烬森林' : '沉没矿坑';
+    return `<section class="panel glass">
+      <h3 class="panel-title">章节目标 · 第 ${ch} 章 ${name}</h3>
+      <div class="goal-list">
+        ${list.map(g => {
+          const pct = Math.min(100, Math.round(g.progress / g.amount * 100));
+          const btn = g.claimed
+            ? '<span class="goal-claimed">✓ 已领取</span>'
+            : g.claimable
+              ? `<button class="primary small" data-action="goal-claim" data-id="${g.id}">领取奖励</button>`
+              : '<span class="goal-locked">进行中</span>';
+          return `<div class="goal-item ${g.done && !g.claimed ? 'ready' : ''}">
+            <div class="goal-head">
+              <span class="goal-ico">${GOAL_ICO[g.type] || '🎯'}</span>
+              <span class="goal-title">${esc(g.type_cn)}：${esc(g.target)}</span>
+              <span class="goal-progress">${g.progress}/${g.amount}</span>
+            </div>
+            <div class="goal-bar"><div class="goal-bar-fill" style="width:${pct}%"></div></div>
+            <div class="goal-foot">
+              <span class="goal-reward">奖励：${esc(goalRewardText(g.reward))}</span>
+              ${btn}
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    </section>`;
+  }).join('');
+}
+async function claimGoal(goalId) {
+  try {
+    const d = await api('/api/rpg/goals/claim', { method: 'POST', body: { goal_id: goalId } });
+    rpg.gold = d.gold;
+    rpg.char = d.character;
+    updateGold();
+    const parts = d.rewards.map(r => r.kind === 'gold'
+      ? `金币×${r.quantity}`
+      : r.kind === 'equip_box'
+        ? `装备箱「${r.name}」(${QUALITY_CN[r.quality] || r.quality})`
+        : `${r.name}×${r.quantity}`);
+    toast(`领取成功：${parts.join('、')}`);
+    viewDungeon();
+  } catch (e) { toast(e.message, true); }
 }
 
 // 副本选择详情：掉落物、概率、可触发剧情（简略）
