@@ -2,6 +2,17 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: b3d9dfb1989d5de331291901cce023f8_d91d586cc93a11f18533525400638852
+    ReservedCode1: vKsH0+rdOkaY+e4Ehl8Hhao0ZWDOTTLs3g32xHR6JxiTR0G9r/GSuoOKGSNY+f889wim+6+TXyrMuKfHMNy1oVLcpP9UimG2kV+WpH46Ng8JRuID1Om8xrQgsWpVD7Dd3vYgzJz7HoXSZdz2LZbhjrE67r1a1gvi8CXVIF3BXOCCP2eKZEyMnGaZ760=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: b3d9dfb1989d5de331291901cce023f8_d91d586cc93a11f18533525400638852
+    ReservedCode2: vKsH0+rdOkaY+e4Ehl8Hhao0ZWDOTTLs3g32xHR6JxiTR0G9r/GSuoOKGSNY+f889wim+6+TXyrMuKfHMNy1oVLcpP9UimG2kV+WpH46Ng8JRuID1Om8xrQgsWpVD7Dd3vYgzJz7HoXSZdz2LZbhjrE67r1a1gvi8CXVIF3BXOCCP2eKZEyMnGaZ760=
+---
+
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
     ProduceID: b3d9dfb1989d5de331291901cce023f8_7abb779cc92b11f18533525400638852
     ReservedCode1: /6zm73hy7D7KsYtMRCoarGdhBLQuplGleeUFUGWJW2OHvwzPgsEFIqHSP5mLo/P4BaRTvZs/tqVNfn932FxqM2kuHuBuZUbSXDLygElfY4EYEurzawMONhy8zLCdyBn89Rj2wf43G5mG/NWeNVbsyZrYLFX+1AoojHI9vxHxMadCBM8G/fZ2rr7CI2s=
     ContentPropagator: 001191440300708461136T1XGW3
@@ -29,6 +40,22 @@ AIGC:
 ## Unreleased（未发布）
 
 > 以下改动已部署到线上服务器（dontdie-ai.com，systemd + nginx HTTPS），尚未发布正式版本号。
+
+### 静态资源白名单集中化与 PWA manifest 接入、铁匠铺与商店状态完善（2026-10-19）
+
+1. **静态资源白名单集中化与 manifest 接入**
+   - `server.mjs` 抽出 `STATIC_FILES` 常量统一管理静态资源白名单，补 `favicon.png`、`favicon-16x16.png`、`favicon-32x32.png`、`favicon-192x192.png`、`favicon-512x512.png`、`android-chrome-192x192.png`、`android-chrome-512x512.png` 等图标别名；移除已废弃的 `campfire.png`。
+   - 新增 `public/site.webmanifest`（name/short_name「我的冒险」、description「每一次出发都通往未知」、theme `#10131a`、icons 192/512 purpose any），并挂载 `/site.webmanifest` 路由，`Content-Type` 为 `application/manifest+json`。
+   - `index.html` 接入 manifest link 与 `theme-color` meta。
+
+2. **铁匠铺锻造状态完善**
+   - `forgeCatalog` 扩展返回 `ownedIngredients`（已有材料数）、`missingIngredients`（缺失材料）、`maxCraftable`（最大可锻造数）、`unlocked`（解锁状态）。
+   - `handleForgeEquip` 支持批量锻造（按可锻造数量上限一次提交）；前端铁匠铺使用 `data-index` 定位、分类 Tab、数量选择、禁用原因提示、结果弹窗、金币背包同步、防重复提交。
+
+3. **商店购买状态完善**
+   - `shop` 返回 `category` / `maxBuy`（最大可购买数），前端商店分类 Tab、数量与总价联动、禁用原因提示、防重复提交。
+
+- 校验：`node --check server.mjs`、`node --check public/app.js` 通过；静态路由冒烟（/ 200、/site.webmanifest 200 application/manifest+json、/favicon.png 200、/android-chrome-512x512.png 200、/campfire.png 404）通过；已部署线上 dontdie-ai.com（systemd restart tieba）并复验通过。
 
 ### 奇幻冒险新图标组与全套文案更新（2026-10-16）
 
@@ -226,6 +253,7 @@ AIGC:
 
 - `server.mjs` 与 `public/app.js` 均通过 `node --check` 语法校验；CSS 括号平衡检查通过。
 - `uploads/` 目录由服务启动时自动创建。
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*

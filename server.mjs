@@ -408,6 +408,34 @@ function topicList(u, qs){
 
 /* ---------- HTTP 服务 ---------- */
 const dungeonSessions = new Map(); // 模块级：副本会话跨请求持久
+
+/* 静态资源白名单（集中成常量，补齐全部 favicon 别名与 PWA manifest） */
+const STATIC_FILES = {
+  '/': 'index.html',
+  '/app.js': 'app.js',
+  '/style.css': 'style.css',
+  '/site.webmanifest': 'site.webmanifest',
+
+  '/favicon.ico': 'favicon.ico',
+  '/favicon.png': 'favicon.png',
+  '/favicon-16.png': 'favicon-16.png',
+  '/favicon-32.png': 'favicon-32.png',
+  '/favicon-48.png': 'favicon-48.png',
+  '/favicon-64.png': 'favicon-64.png',
+  '/favicon-192.png': 'favicon-192.png',
+  '/favicon-512.png': 'favicon-512.png',
+
+  '/favicon-16x16.png': 'favicon-16x16.png',
+  '/favicon-32x32.png': 'favicon-32x32.png',
+  '/favicon-48x48.png': 'favicon-48x48.png',
+  '/favicon-64x64.png': 'favicon-64x64.png',
+  '/favicon-192x192.png': 'favicon-192x192.png',
+  '/favicon-512x512.png': 'favicon-512x512.png',
+
+  '/apple-touch-icon.png': 'apple-touch-icon.png',
+  '/android-chrome-192x192.png': 'android-chrome-192x192.png',
+  '/android-chrome-512x512.png': 'android-chrome-512x512.png'
+};
 const server = http.createServer(async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'same-origin');
@@ -429,12 +457,12 @@ const server = http.createServer(async (req, res) => {
         });
         return res.end(readFileSync(resolve(uploads, name)));
       }
-      const files = { '/':'index.html', '/app.js':'app.js', '/style.css':'style.css', '/campfire.png':'campfire.png', '/favicon.ico':'favicon.ico', '/favicon-16x16.png':'favicon-16x16.png', '/favicon-32x32.png':'favicon-32x32.png', '/favicon-48x48.png':'favicon-48x48.png', '/favicon-64x64.png':'favicon-64x64.png', '/favicon-192x192.png':'favicon-192x192.png', '/favicon-512x512.png':'favicon-512x512.png', '/apple-touch-icon.png':'apple-touch-icon.png', '/android-chrome-192x192.png':'android-chrome-192x192.png' };
-      const file = files[path];
+      const file = STATIC_FILES[path];
       if(!file || !existsSync(resolve(root, 'public', file))) return out(res, 404, { error: '页面不存在' });
       res.writeHead(200, {
         'Content-Type': file.endsWith('.js') ? 'text/javascript; charset=utf-8'
           : file.endsWith('.css') ? 'text/css; charset=utf-8'
+          : file.endsWith('.webmanifest') ? 'application/manifest+json'
           : file.endsWith('.png') ? 'image/png'
           : file.endsWith('.ico') ? 'image/x-icon'
           : 'text/html; charset=utf-8',
@@ -1078,12 +1106,38 @@ async function handleDungeonSettings(req, res, u){
 }
 
 /* ========== 阶段3：铁匠铺 / 商店 / 交易行（第 7 节） ========== */
-function forgeCatalog(){
+function ownedMaterialMap(uId){
+  const m = {};
+  for(const r of all('SELECT name, SUM(quantity) AS q FROM items WHERE owner_id=? AND type=? AND location=? GROUP BY name', uId, 'material', 'backpack'))
+    m[r.name] = Number(r.q);
+  return m;
+}
+function forgeCatalog(uId){
+  const p = uId ? getPlayer(uId) : null;
+  const owned = uId ? ownedMaterialMap(uId) : {};
+  const gold = p ? p.gold : 0;
+  const decorate = (name, r, kind, extra) => {
+    let maxCraftable = Infinity;
+    const ownedIngredients = {}, missingIngredients = {};
+    for(const [mn, qty] of Object.entries(r.ingredients || {})){
+      const have = owned[mn] || 0;
+      ownedIngredients[mn] = have;
+      if(have < qty) missingIngredients[mn] = qty - have;
+      const lim = Math.floor(have / qty);
+      if(lim < maxCraftable) maxCraftable = lim;
+    }
+    const goldLim = Math.floor(gold / r.cost);
+    if(goldLim < maxCraftable) maxCraftable = goldLim;
+    if(!Number.isFinite(maxCraftable) || maxCraftable < 0) maxCraftable = 0;
+    const unlocked = kind === 'equip_2' ? (p && (p.chapter >= 2 || p.boss_kills_ch1 > 0)) : true;
+    return { name, cost: r.cost, ingredients: r.ingredients, ownedIngredients, missingIngredients, maxCraftable: unlocked ? maxCraftable : 0, unlocked, ...(extra || {}) };
+  };
   return {
-    material: Object.entries(CRAFT_MATERIAL).map(([name, r]) => ({ name, cost: r.cost, ingredients: r.ingredients })),
-    potion: Object.entries(CRAFT_POTION).map(([name, r]) => ({ name, cost: r.cost, ingredients: r.ingredients })),
-    equip_1: Object.entries(CRAFT_EQUIP_1).map(([name, r]) => ({ name, cost: r.cost, ingredients: r.ingredients, quality: 'normal' })),
-    equip_2: Object.entries(CRAFT_EQUIP_2).map(([name, r]) => ({ name, cost: r.cost, ingredients: r.ingredients, quality: 'fine' }))
+    gold,
+    material: Object.entries(CRAFT_MATERIAL).map(([name, r]) => decorate(name, r, 'material')),
+    potion: Object.entries(CRAFT_POTION).map(([name, r]) => decorate(name, r, 'potion')),
+    equip_1: Object.entries(CRAFT_EQUIP_1).map(([name, r]) => decorate(name, r, 'equip_1', { quality: 'normal' })),
+    equip_2: Object.entries(CRAFT_EQUIP_2).map(([name, r]) => decorate(name, r, 'equip_2', { quality: 'fine' }))
   };
 }
 function scaleIngredients(ingredients, quantity){
@@ -1146,16 +1200,28 @@ async function handleForgeEquip(req, res, u){
   const pool = r1 ? CH1_EQUIP : CH2_EQUIP;
   const proto = pool.find(x => x.name === b.recipe);
   if(!proto) return out(res, 400, { error: '未知装备' });
-  if(p.gold < recipe.cost) return out(res, 400, { error: '金币不足' });
-  consumeMaterials(u.id, recipe.ingredients);
-  p.gold -= recipe.cost;
+  const quantity = Math.max(1, Math.min(99, Number(b.quantity) || 1));
+  const totalCost = recipe.cost * quantity;
+  if(p.gold < totalCost) return out(res, 400, { error: '金币不足' });
+  consumeMaterials(u.id, scaleIngredients(recipe.ingredients, quantity));
+  p.gold -= totalCost;
   stmt('UPDATE player SET gold=? WHERE user_id=?', p.gold, u.id);
   const quality = r1 ? 'normal' : 'fine';
-  addItem(u.id, proto.name, proto.type, quality, proto.stats, 'backpack', 1);
-  return out(res, 201, { ok: true, name: proto.name, type: proto.type, quality, cost: recipe.cost, gold: p.gold, stats: proto.stats });
+  for(let i = 0; i < quantity; i++) addItem(u.id, proto.name, proto.type, quality, proto.stats, 'backpack', 1);
+  return out(res, 201, { ok: true, name: proto.name, type: proto.type, quality, quantity, cost: totalCost, gold: p.gold, stats: proto.stats });
 }
+const SHOP_CATEGORY_CN = { consumable: '消耗品', material: '材料', equip_box: '装备箱' };
 async function handleShopItems(req, res, u){
-  return out(res, 200, { items: Object.entries(SHOP_ITEMS).map(([name, it]) => ({ name, type: it.type, price: it.price, stats: it.stats || {} })) });
+  const p = getPlayer(u.id);
+  if(!p) return out(res, 404, { error: '尚未创建角色' });
+  return out(res, 200, {
+    gold: p.gold,
+    items: Object.entries(SHOP_ITEMS).map(([name, it]) => ({
+      name, type: it.type, category: SHOP_CATEGORY_CN[it.type] || '其他',
+      price: it.price, stats: it.stats || {},
+      maxBuy: it.type === 'equip_box' ? 1 : Math.max(0, Math.floor(p.gold / it.price))
+    }))
+  });
 }
 async function handleShopBuy(req, res, u){
   const b = await body(req);
@@ -1171,7 +1237,7 @@ async function handleShopBuy(req, res, u){
     const proto = CHAPTER_CONFIG[1].equip[randInt(0, CHAPTER_CONFIG[1].equip.length - 1)];
     const q = rollDropQuality('box', 0, 0) || 'normal';
     addItem(u.id, proto.name, proto.type, q, proto.stats, 'backpack', 1);
-    return out(res, 201, { ok: true, box: true, name: proto.name, type: proto.type, quality: q, cost: item.price, gold: p.gold });
+    return out(res, 201, { ok: true, box: true, name: proto.name, type: proto.type, quality: q, quantity: 1, stats: proto.stats, cost: item.price, gold: p.gold });
   }
   const total = item.price * quantity;
   if(p.gold < total) return out(res, 400, { error: '金币不足' });
@@ -1264,7 +1330,7 @@ async function handleMarketCancel(req, res, u){
     if(path === '/api/rpg/dungeon/settings' && method === 'POST') return await handleDungeonSettings(req, res, u);
 
     /* ========== 阶段3：铁匠铺 / 商店 / 交易行接口（第 7 节） ========== */
-    if(path === '/api/rpg/forge/catalog' && method === 'GET') return out(res, 200, forgeCatalog());
+    if(path === '/api/rpg/forge/catalog' && method === 'GET') return out(res, 200, forgeCatalog(u.id));
     if(path === '/api/rpg/forge/material' && method === 'POST') return await handleForgeMaterial(req, res, u);
     if(path === '/api/rpg/forge/potion' && method === 'POST') return await handleForgePotion(req, res, u);
     if(path === '/api/rpg/forge/equip' && method === 'POST') return await handleForgeEquip(req, res, u);

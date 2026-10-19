@@ -514,6 +514,13 @@ textarea.uploading{border-color:var(--mint)!important;opacity:.8}
 .modal{width:min(430px,100%);max-height:88vh;overflow:auto;padding:22px;border-radius:18px}
 .modal-title{margin:0 0 14px;font-size:18px}
 .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:16px}
+button:disabled,.qty:disabled{opacity:.45;filter:grayscale(.5);cursor:not-allowed;pointer-events:none}
+.forge-buy-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.forge-buy-row .qty{width:58px;padding:6px 8px;background:var(--panel3);border:1px solid var(--line);border-radius:9px;text-align:center}
+.forge-hint{font-size:12px;flex-basis:100%}
+.forge-miss{color:#f87171;font-weight:600}
+.forge-lock{color:var(--muted);font-weight:600}
+.shop-total{font-size:12px;white-space:nowrap}
 .color-row{display:flex;gap:8px;flex-wrap:wrap}
 .color-dot{width:30px;height:30px;border-radius:50%;border:2px solid transparent;cursor:pointer}
 .color-dot.active{border-color:#fff;box-shadow:0 0 0 3px #f59e0b66}

@@ -122,6 +122,9 @@ let ME = null;
 let rpg = { char: null, gold: 0, backpack: null, dungeon: null, forge: null, shop: null };
 let currentBackpackTab = 'equipment';
 let currentForgeTab = 'material';
+let currentShopTab = 'all';
+let shopBuying = false;
+let forgeBusy = false;
 let dungeonSession = null; // { chapter, events, idx } 前端副本会话缓存
 let chatOpen = window.matchMedia('(min-width: 1025px)').matches;
 
@@ -149,13 +152,17 @@ document.addEventListener('click', async e => {
   else if (a === 'unequip') unequipItem(el.dataset.id);
   else if (a === 'bp-tab') { currentBackpackTab = el.dataset.tab; renderBackpackList(); }
   else if (a === 'forge-tab') { currentForgeTab = el.dataset.tab; renderForgeList(); }
-  else if (a === 'forge') forgeItem(el.dataset.kind, el.dataset.name);
+  else if (a === 'forge-qty') updateForgeQty(el.dataset.index);
+  else if (a === 'forge') forgeItem(el.dataset.kind, el.dataset.key, Number(el.dataset.index));
   else if (a === 'dungeon-start') startDungeon();
   else if (a === 'dungeon-event') dungeonEvent(el.dataset.choice || '');
   else if (a === 'dungeon-settle') dungeonSettle();
   else if (a === 'dungeon-info') showDungeonInfo(el.dataset.chapter);
   else if (a === 'save-settings') saveDungeonSettings();
-  else if (a === 'shop-buy') shopBuy(el.dataset.name);
+  else if (a === 'shop-tab') { currentShopTab = el.dataset.tab; renderShopList(); }
+  else if (a === 'shop-qty') updateShopQty(el.dataset.index);
+  else if (a === 'shop-buy') shopBuy(Number(el.dataset.index));
+  else if (a === 'go-backpack') { closeModal(); switchView('backpack'); }
   else if (a === 'open-profile') { switchView('profile'); }
   else if (a === 'close-modal') closeModal();
   else if (a === 'edit-profile') openEditProfile();
@@ -991,6 +998,8 @@ async function viewForge() {
   try {
     const cat = await api('/api/rpg/forge/catalog');
     rpg.forge = cat;
+    rpg.gold = cat.gold;
+    updateGold();
     $('#view').innerHTML = `
       <div class="page-title"><h2>铁匠铺</h2><p class="muted">以材料锻造更强装备</p></div>
       <div class="tabs" id="forgeTabs">
@@ -1009,32 +1018,94 @@ function renderForgeList() {
   const cat = rpg.forge;
   if (!cat) return;
   const wrap = $('#forgeList');
-  let kind = 'material', list = [], title = '材料合成';
-  if (currentForgeTab === 'material') { kind = 'material'; list = cat.material || []; title = '材料合成'; }
-  else if (currentForgeTab === 'potion') { kind = 'potion'; list = cat.potion || []; title = '药水制作'; }
-  else if (currentForgeTab === 'equip1') { kind = 'equip'; list = cat.equip_1 || []; title = '第一章装备（普通）'; }
-  else { kind = 'equip'; list = cat.equip_2 || []; title = '第二章装备（优良）'; }
+  let apiKind = 'material', key = 'material', list = [], title = '材料合成';
+  if (currentForgeTab === 'material') { apiKind = 'material'; key = 'material'; list = cat.material || []; title = '材料合成'; }
+  else if (currentForgeTab === 'potion') { apiKind = 'potion'; key = 'potion'; list = cat.potion || []; title = '药水制作'; }
+  else if (currentForgeTab === 'equip1') { apiKind = 'equip'; key = 'equip_1'; list = cat.equip_1 || []; title = '第一章装备（普通）'; }
+  else { apiKind = 'equip'; key = 'equip_2'; list = cat.equip_2 || []; title = '第二章装备（优良）'; }
   if (!list.length) { wrap.innerHTML = '<p class="empty-tip">暂无配方</p>'; return; }
   wrap.innerHTML = `<h3 class="panel-title">${title}</h3><div class="forge-list">
-    ${list.map(it => `
+    ${list.map((it, idx) => {
+      const ingParts = Object.entries(it.ingredients || {}).map(([m, q]) => {
+        const have = it.ownedIngredients ? (it.ownedIngredients[m] || 0) : 0;
+        const lack = have < q;
+        return `<span class="${lack ? 'forge-miss' : ''}">${esc(m)} ${have}/${q}${lack ? `（缺${q - have}）` : ''}</span>`;
+      }).join(' + ');
+      const lockMsg = it.unlocked ? '' : '<span class="forge-lock">🔒 未解锁（需通关第一章 Boss）</span>';
+      const lackMsg = it.unlocked && it.maxCraftable <= 0 ? '<span class="forge-miss">材料或金币不足</span>' : '';
+      const canCraft = it.unlocked && it.maxCraftable > 0 && !forgeBusy;
+      return `
       <div class="forge-row glass">
         <div class="forge-name">${esc(it.name)} ${it.quality ? qualityBadge(it.quality) : ''}</div>
         <div class="forge-cost">🪙 ${it.cost}</div>
-        <div class="forge-ing">${Object.entries(it.ingredients || {}).map(([m, q]) => `${esc(m)} ×${q}`).join(' + ')}</div>
-        <button class="primary sm" data-action="forge" data-kind="${kind}" data-name="${esc(it.name)}">制作</button>
-      </div>`).join('')}
+        <div class="forge-ing">${ingParts}</div>
+        ${(lockMsg || lackMsg) ? `<div class="forge-hint">${lockMsg}${lackMsg}</div>` : ''}
+        <div class="forge-buy-row">
+          <input type="number" class="qty" value="1" min="1" max="${it.maxCraftable || 1}" id="fqty-${key}-${idx}" data-action="forge-qty" data-index="${idx}" ${canCraft ? '' : 'disabled'}>
+          <span class="muted">最多 ${it.maxCraftable}</span>
+          <button class="primary sm" data-action="forge" data-kind="${apiKind}" data-key="${key}" data-index="${idx}" ${canCraft ? '' : 'disabled'}>制作</button>
+        </div>
+      </div>`;
+    }).join('')}
   </div>`;
 }
 
-async function forgeItem(kind, name) {
-  const path = kind === 'material' ? '/api/rpg/forge/material' : kind === 'potion' ? '/api/rpg/forge/potion' : '/api/rpg/forge/equip';
+function updateForgeQty(index) {
+  const cat = rpg.forge;
+  if (!cat) return;
+  const key = currentForgeTab === 'equip1' ? 'equip_1' : currentForgeTab === 'equip2' ? 'equip_2' : currentForgeTab;
+  const it = (cat[key] || [])[index];
+  if (!it) return;
+  const el = $('#fqty-' + key + '-' + index);
+  if (!el) return;
+  let v = Math.max(1, Math.min(it.maxCraftable || 1, Number(el.value) || 1));
+  el.value = v;
+}
+
+async function refreshBackpack() {
   try {
-    const d = await api(path, { method: 'POST', body: { recipe: name } });
+    const d = await api('/api/rpg/backpack');
+    rpg.backpack = d.backpack;
+  } catch (e) { /* 静默：下次进背包页再拉取 */ }
+}
+
+function showForgeResult(d) {
+  const stats = d.stats && Object.keys(d.stats).length ? `<div class="item-stats">${statsText(d.stats)}</div>` : '';
+  const badge = d.quality ? qualityBadge(d.quality) : '';
+  openModal(`
+    <h3 class="modal-title">制作成功</h3>
+    <div class="modal-body">
+      <p>获得 <b>${esc(d.name)}</b> ${badge}${d.quantity ? ' ×' + d.quantity : ''}</p>
+      ${stats}
+      <p class="muted">消耗 🪙 ${d.cost}${d.cost !== undefined ? '' : ''}</p>
+    </div>
+    <div class="modal-actions">
+      <button class="primary" data-action="close-modal">继续</button>
+    </div>`);
+}
+
+async function forgeItem(kind, key, index) {
+  if (forgeBusy) return;
+  const list = (rpg.forge || {})[key] || [];
+  const it = list[index];
+  if (!it) return;
+  const path = kind === 'material' ? '/api/rpg/forge/material' : kind === 'potion' ? '/api/rpg/forge/potion' : '/api/rpg/forge/equip';
+  const qtyEl = $('#fqty-' + key + '-' + index);
+  const max = it.maxCraftable || 1;
+  const quantity = qtyEl ? Math.max(1, Math.min(max, Number(qtyEl.value) || 1)) : 1;
+  forgeBusy = true;
+  try {
+    const d = await api(path, { method: 'POST', body: { recipe: it.name, quantity } });
     rpg.gold = d.gold;
     updateGold();
-    toast(`制作成功：${d.name}${d.quantity ? ' ×' + d.quantity : ''}`);
-    viewForge();
-  } catch (e) { toast(e.message, true); }
+    refreshBackpack();
+    showForgeResult(d);
+    const cat = await api('/api/rpg/forge/catalog');
+    rpg.forge = cat;
+    rpg.gold = cat.gold;
+    updateGold();
+    renderForgeList();
+  } catch (e) { toast(e.message, true); } finally { forgeBusy = false; }
 }
 
 /* ================================================================
@@ -1046,36 +1117,96 @@ async function viewShop() {
   try {
     const d = await api('/api/rpg/shop/items');
     rpg.shop = d.items || [];
-    try { const b = await api('/api/rpg/character'); rpg.gold = b.character.gold; } catch {}
+    rpg.gold = d.gold;
     updateGold();
     $('#view').innerHTML = `
       <div class="page-title"><h2>商店</h2><p class="muted">补给、交易与冒险准备</p></div>
-      <div class="shop-grid">
-        ${rpg.shop.map(it => `
-          <div class="shop-card glass">
-            <div class="shop-ico">${it.type === 'equip_box' ? '🎁' : TYPE_ICO[it.type] || '📦'}</div>
-            <div class="shop-name">${esc(it.name)}</div>
-            <div class="shop-type muted">${it.type === 'equip_box' ? '装备箱' : TYPE_CN[it.type] || it.type}</div>
-            ${it.stats && Object.keys(it.stats).length ? `<div class="shop-stats">${statsText(it.stats)}</div>` : ''}
-            <div class="shop-buy-row">
-              <input type="number" class="qty" value="1" min="1" max="99" id="qty-${esc(it.name)}">
-              <button class="primary sm" data-action="shop-buy" data-name="${esc(it.name)}">🪙 ${it.price} 购买</button>
-            </div>
-          </div>`).join('')}
-      </div>`;
+      <div class="tabs" id="shopTabs">
+        <button data-action="shop-tab" data-tab="all">全部</button>
+        <button data-action="shop-tab" data-tab="consumable">消耗品</button>
+        <button data-action="shop-tab" data-tab="material">材料</button>
+        <button data-action="shop-tab" data-tab="equip_box">装备箱</button>
+      </div>
+      <div id="shopList"></div>`;
+    renderShopList();
   } catch (e) { toast(e.message, true); $('#view').innerHTML = '<p class="empty-tip">加载失败</p>'; }
 }
 
-async function shopBuy(name) {
-  const qtyEl = $('#qty-' + name);
-  const quantity = qtyEl ? Math.max(1, Math.min(99, Number(qtyEl.value) || 1)) : 1;
+function renderShopList() {
+  $$('#shopTabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === currentShopTab));
+  const wrap = $('#shopList');
+  if (!wrap) return;
+  const list = (rpg.shop || []).map((it, i) => ({ ...it, _i: i })).filter(it => currentShopTab === 'all' || it.type === currentShopTab);
+  if (!list.length) { wrap.innerHTML = '<p class="empty-tip">暂无商品</p>'; return; }
+  wrap.innerHTML = `<div class="shop-grid">
+    ${list.map(it => {
+      const fixed = it.type === 'equip_box';
+      const canBuy = shopBuying || it.maxBuy <= 0 ? false : true;
+      return `
+      <div class="shop-card glass">
+        <div class="shop-ico">${it.type === 'equip_box' ? '🎁' : TYPE_ICO[it.type] || '📦'}</div>
+        <div class="shop-name">${esc(it.name)}</div>
+        <div class="shop-type muted">${it.category || (it.type === 'equip_box' ? '装备箱' : TYPE_CN[it.type] || it.type)}</div>
+        ${it.stats && Object.keys(it.stats).length ? `<div class="shop-stats">${statsText(it.stats)}</div>` : ''}
+        <div class="shop-buy-row">
+          <input type="number" class="qty" value="1" min="1" max="${fixed ? 1 : it.maxBuy}" id="sqty-${it.type}-${it._i}" data-action="shop-qty" data-index="${it._i}" ${canBuy && !fixed ? '' : 'disabled'}>
+          <span class="shop-total muted" id="stotal-${it.type}-${it._i}">共 🪙 ${it.price}</span>
+          <button class="primary sm" data-action="shop-buy" data-index="${it._i}" ${canBuy ? '' : 'disabled'}>🪙 ${it.price} 购买</button>
+        </div>
+        ${it.maxBuy <= 0 && !fixed ? '<div class="forge-hint forge-miss">金币不足</div>' : ''}
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function updateShopQty(index) {
+  const it = (rpg.shop || [])[index];
+  if (!it) return;
+  const el = $('#sqty-' + it.type + '-' + index);
+  if (!el) return;
+  const max = it.type === 'equip_box' ? 1 : (it.maxBuy || 1);
+  let v = Math.max(1, Math.min(max, Number(el.value) || 1));
+  el.value = v;
+  const total = $('#stotal-' + it.type + '-' + index);
+  if (total) total.textContent = '共 🪙 ' + (it.price * v);
+}
+
+function showShopResult(d) {
+  const stats = d.stats && Object.keys(d.stats).length ? `<div class="item-stats">${statsText(d.stats)}</div>` : '';
+  const badge = d.quality ? qualityBadge(d.quality) : '';
+  openModal(`
+    <h3 class="modal-title">购买成功</h3>
+    <div class="modal-body">
+      <p>获得 <b>${esc(d.name)}</b> ${badge}${d.box ? '' : ' ×' + d.quantity}</p>
+      ${stats}
+      <p class="muted">花费 🪙 ${d.cost}</p>
+    </div>
+    <div class="modal-actions">
+      <button class="primary" data-action="go-backpack">去背包</button>
+      <button class="ghost" data-action="close-modal">继续购物</button>
+    </div>`);
+}
+
+async function shopBuy(index) {
+  if (shopBuying) return;
+  const it = (rpg.shop || [])[index];
+  if (!it) return;
+  const fixed = it.type === 'equip_box';
+  const qtyEl = $('#sqty-' + it.type + '-' + index);
+  const quantity = fixed ? 1 : (qtyEl ? Math.max(1, Math.min(it.maxBuy || 1, Number(qtyEl.value) || 1)) : 1);
+  shopBuying = true;
   try {
-    const d = await api('/api/rpg/shop/buy', { method: 'POST', body: { item: name, quantity } });
+    const d = await api('/api/rpg/shop/buy', { method: 'POST', body: { item: it.name, quantity } });
     rpg.gold = d.gold;
     updateGold();
-    toast(`购买成功：${d.name}${d.box ? '（' + (QUALITY_CN[d.quality] || d.quality) + '）' : ' ×' + d.quantity}`);
-    viewShop();
-  } catch (e) { toast(e.message, true); }
+    refreshBackpack();
+    showShopResult(d);
+    const s = await api('/api/rpg/shop/items');
+    rpg.shop = s.items || [];
+    rpg.gold = s.gold;
+    updateGold();
+    renderShopList();
+  } catch (e) { toast(e.message, true); } finally { shopBuying = false; }
 }
 
 /* ================================================================
