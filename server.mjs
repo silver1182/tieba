@@ -181,7 +181,7 @@ const RACE_CONFIG = {
 const INIT_STATS = { level:1, exp:0, gold:0, max_hp:100, cur_hp:100, attack:12, defense:5, crit_rate:5, crit_dmg:150, gold_bonus:0 };
 const LEVEL_UP_GROWTH = { max_hp:20, attack:3, defense:1 };
 const START_ITEM = { name:'小木剑', type:'weapon', quality:'normal', stats:{ attack:2 }, location:'equipped_weapon' };
-const ITEM_QUALITY_MULT = { normal:1.00, fine:1.20, superb:1.45, rare:1.75 };
+const ITEM_QUALITY_MULT = { normal:1.00, fine:1.20, superb:1.45, rare:1.75, legendary:2.20 };
 
 /* ========== 阶段2：副本与战斗配置（第 3/4/6 节） ========== */
 const DUNGEON_DAILY_LIMIT = 5;
@@ -349,7 +349,7 @@ function ensureDailyTasks(dateStr){
   });
 }
 const MAX_BATTLE_TURNS = 80;
-const QUALITY_ORDER = ['normal', 'fine', 'superb', 'rare'];
+const QUALITY_ORDER = ['normal', 'fine', 'superb', 'rare', 'legendary'];
 
 const MONSTER_CONFIG = {
   /* 第一章：灰烬森林 */
@@ -366,25 +366,33 @@ const MONSTER_CONFIG = {
   '矿坑领主莫拉克': { chapter:2, tier:'boss', kind:'黑雾', hp:340, attack:27, defense:10, exp:320, gold:[100,150], surge_every:3, surge_dmg:25, surge_def:3, summon_hp:0.60, summon_reduce:0.20, frenzy_hp:0.20, frenzy_atk:8, frenzy_dot:5 }
 };
 
-/* 第一章装备池（掉落原型，品质由掉落 roll 决定） */
+/* 第一章装备池（掉落原型，品质由掉落 roll 决定；desc 用于展示） */
 const CH1_EQUIP = [
-  { name:'猎人短弓', type:'weapon', stats:{ attack:6, crit_rate:5 } },
-  { name:'狼牙短刃', type:'weapon', stats:{ attack:9, beast_hp_low_dmg:3 } },
-  { name:'旧皮甲', type:'armor', stats:{ defense:3, max_hp:10 } },
-  { name:'狼皮护肩', type:'armor', stats:{ defense:5, beast_dmg_reduce:0.10 } },
-  { name:'猎人护符', type:'accessory', stats:{ crit_rate:5 } },
-  { name:'盗匪腰包', type:'accessory', stats:{ gold_bonus:15, defense:-1 } },
-  { name:'木雕护符', type:'accessory', stats:{ max_hp:15 } }
+  { name:'猎人短弓', type:'weapon', stats:{ attack:6, crit_rate:5 }, desc:'林间猎人的制式短弓，弓弦紧绷、射程不俗。' },
+  { name:'狼牙短刃', type:'weapon', stats:{ attack:9, beast_hp_low_dmg:3 }, desc:'以狼牙磨制的短刃，对濒死的野兽格外锋利。' },
+  { name:'猎人长弓', type:'weapon', stats:{ attack:12, crit_rate:8 }, desc:'上等猎弓，拉满弦时能洞穿两棵树后的猎物。' },
+  { name:'旧皮甲', type:'armor', stats:{ defense:3, max_hp:10 }, desc:'陈旧的皮甲，边缘磨得发亮，仍能挡下几刀。' },
+  { name:'狼皮护肩', type:'armor', stats:{ defense:5, beast_dmg_reduce:0.10 }, desc:'狼皮缝制的护肩，坚韧且带着野兽的余威。' },
+  { name:'荆棘皮甲', type:'armor', stats:{ defense:6, max_hp:15 }, desc:'缠满荆棘藤条的皮甲，防御与生机兼备。' },
+  { name:'猎人护符', type:'accessory', stats:{ crit_rate:5 }, desc:'刻着猎获标记的木符，佩戴者出手更加刁钻。' },
+  { name:'盗匪腰包', type:'accessory', stats:{ gold_bonus:15, defense:-1 }, desc:'从盗匪身上搜来的腰包，鼓鼓囊囊装满油水。' },
+  { name:'木雕护符', type:'accessory', stats:{ max_hp:15 }, desc:'粗糙的木雕护符，却蕴含着旺盛的生命力。' }
 ];
-/* 第二章装备池（备用） */
+/* 第二章装备池 */
 const CH2_EQUIP = [
-  { name:'黑铁战斧', type:'weapon', stats:{ attack:16, crit_dmg:20, crit_rate:-5 } },
-  { name:'净化法杖', type:'weapon', stats:{ attack:11, undead_dmg:0.25 } },
-  { name:'黑铁胸甲', type:'armor', stats:{ defense:10, max_hp:30, heal_pct_penalty:0.10 } },
-  { name:'矿工重铠', type:'armor', stats:{ defense:13, big_hit_reduce:10 } },
-  { name:'守卫徽章', type:'accessory', stats:{ defense:4, high_hp_reduce:0.05 } },
-  { name:'矿坑领主戒指', type:'accessory', stats:{ attack:5, defense:3, death_save:1 } }
+  { name:'黑铁战斧', type:'weapon', stats:{ attack:16, crit_dmg:20, crit_rate:-5 }, desc:'沉甸甸的黑铁战斧，一击可劈开岩壁。' },
+  { name:'净化法杖', type:'weapon', stats:{ attack:11, undead_dmg:0.25 }, desc:'附着净化符文的法杖，对黑暗之物伤害倍增。' },
+  { name:'精铁大剑', type:'weapon', stats:{ attack:19, crit_dmg:15 }, desc:'矿工锻造的精铁大剑，剑锋泛着寒光。' },
+  { name:'黑铁胸甲', type:'armor', stats:{ defense:10, max_hp:30, heal_pct_penalty:0.10 }, desc:'重甲防护周全，但灵药难以渗入铠甲。' },
+  { name:'矿工重铠', type:'armor', stats:{ defense:13, big_hit_reduce:10 }, desc:'矿工们合力打造的厚重铠甲，能卸掉致命重击。' },
+  { name:'守卫徽章', type:'accessory', stats:{ defense:4, high_hp_reduce:0.05 }, desc:'矿坑守卫的徽章，满血时愈显坚不可摧。' },
+  { name:'矿坑领主戒指', type:'accessory', stats:{ attack:5, defense:3, death_save:1 }, desc:'领主陨落后遗留的戒指，能在绝境中护主一次。' },
+  { name:'矿灯坠饰', type:'accessory', stats:{ attack:4, crit_rate:10 }, desc:'以矿灯晶石打磨的坠饰，黑暗中熠熠生辉。' }
 ];
+
+/* 装备名称 → 描述映射（入库物品不含 desc 列，展示时按名称补全） */
+const EQUIP_DESC = {};
+[...CH1_EQUIP, ...CH2_EQUIP].forEach(e => { EQUIP_DESC[e.name] = e.desc || ''; });
 
 const ENCOUNTER_CONFIG = {
   '采药人':   { chapter:1, desc:'你在林间遇到一位采药人。', choices:['帮助他（恢复15点生命并得到小型药水）', '索要药材（获得15金币，但下场敌人攻击+3）'] },
@@ -428,13 +436,13 @@ const CHAPTER_GOALS = {
   for(const g of seedGoals) goalStmt.run(g.id, g.chapter, g.type, g.target, g.amount, g.reward_gold, JSON.stringify(g.reward_items), g.sort);
 }
 
-/* 掉落概率（第 7 节：普通/优良/精良/稀有） */
+/* 掉落概率（P3：普通/优良/精良/稀有/传说，白→金 5 档） */
 const DROP_TABLE = {
-  normal: { normal:0.16, fine:0.07, superb:0.018, rare:0.002 },
-  elite:  { normal:0.30, fine:0.18, superb:0.06, rare:0.01 },
-  boss1:  { normal:0.30, fine:0.40, superb:0.25, rare:0.05 },
-  boss2:  { normal:0.20, fine:0.35, superb:0.35, rare:0.10 },
-  box:    { normal:0.60, fine:0.30, superb:0.08, rare:0.02 }
+  normal: { normal:0.16, fine:0.07, superb:0.018, rare:0.002, legendary:0.0004 },
+  elite:  { normal:0.30, fine:0.18, superb:0.06, rare:0.01, legendary:0.003 },
+  boss1:  { normal:0.30, fine:0.40, superb:0.25, rare:0.05, legendary:0.01 },
+  boss2:  { normal:0.20, fine:0.35, superb:0.35, rare:0.10, legendary:0.03 },
+  box:    { normal:0.60, fine:0.30, superb:0.08, rare:0.02, legendary:0.005 }
 };
 
 const POTION_ITEMS = { '小型药水': { heal_pct:30 }, '中型药水': { heal_pct:50 } };
@@ -500,6 +508,11 @@ function safeJson(s, fb){ try { return JSON.parse(s || '{}'); } catch { return f
 function getPlayer(userId){ return get('SELECT * FROM player WHERE user_id=?', userId); }
 function getPlayerItems(userId){ return all('SELECT * FROM items WHERE owner_id=? ORDER BY id', userId).map(r => ({ ...r, stats: safeJson(r.stats, {}) })); }
 
+/* 战力估算（P3）：生命 + 攻×3 + 防×2 + 暴击率×1.5 + 爆伤×0.5 + 金币加成×2 */
+function calcPower(maxHp, attack, defense, critRate, critDmg, goldBonus){
+  return Math.floor(Number(maxHp) + Number(attack) * 3 + Number(defense) * 2 + Number(critRate) * 1.5 + Number(critDmg) * 0.5 + Number(goldBonus) * 2);
+}
+
 /* 最终属性 = 等级基础 + 种族修正 + 装备加成（爆伤为加法叠加） */
 function computeStats(p, items){
   if(!p) return null;
@@ -507,14 +520,16 @@ function computeStats(p, items){
   const sum = key => eq.reduce((t, it) => t + (Number(it.stats[key]) || 0), 0);
   const race = RACE_CONFIG[p.race] || {};
   const maxHp = p.max_hp + (race.max_hp || 0) + sum('max_hp');
+  const attack = p.attack + (race.attack || 0) + sum('attack');
+  const defense = p.defense + (race.defense || 0) + sum('defense');
+  const crit_rate = p.crit_rate + (race.crit_rate || 0) + sum('crit_rate');
+  const crit_dmg = p.crit_dmg + sum('crit_dmg');
+  const gold_bonus = p.gold_bonus + sum('gold_bonus');
   return {
     user_id: p.user_id, race: p.race, level: p.level, exp: p.exp,
     gold: p.gold, max_hp: maxHp, cur_hp: p.cur_hp <= 0 ? maxHp : Math.min(p.cur_hp, maxHp),
-    attack: p.attack + (race.attack || 0) + sum('attack'),
-    defense: p.defense + (race.defense || 0) + sum('defense'),
-    crit_rate: p.crit_rate + (race.crit_rate || 0) + sum('crit_rate'),
-    crit_dmg: p.crit_dmg + sum('crit_dmg'),
-    gold_bonus: p.gold_bonus + sum('gold_bonus'),
+    attack, defense, crit_rate, crit_dmg, gold_bonus,
+    power: calcPower(maxHp, attack, defense, crit_rate, crit_dmg, gold_bonus),
     daily_count: p.daily_count, last_dungeon_date: p.last_dungeon_date, chapter: p.chapter,
     boss_kills_ch1: p.boss_kills_ch1, boss_kills_ch2: p.boss_kills_ch2, created: p.created
   };
@@ -539,7 +554,7 @@ function buildCharacter(userId){
     }
   }
   const s = computeStats(p, items);
-  const equipped = items.filter(it => it.location.startsWith('equipped_')).map(it => ({ id:it.id, name:it.name, type:it.type, quality:it.quality, stats:it.stats, location:it.location }));
+  const equipped = items.filter(it => it.location.startsWith('equipped_')).map(it => ({ id:it.id, name:it.name, type:it.type, quality:it.quality, stats:it.stats, location:it.location, desc:EQUIP_DESC[it.name] || '' }));
   return { ...s, equipped };
 }
 function buildBackpack(userId){
@@ -548,7 +563,7 @@ function buildBackpack(userId){
   const stack = new Map();
   for(const it of items){
     if(['weapon','armor','accessory'].includes(it.type)){
-      if(it.location === 'backpack') groups.equipment.push(it);
+      if(it.location === 'backpack') groups.equipment.push({ ...it, desc: EQUIP_DESC[it.name] || '' });
       continue;
     }
     const g = it.type === 'consumable' ? groups.consumable : it.type === 'material' ? groups.material : groups.quest;
@@ -813,22 +828,54 @@ const server = http.createServer(async (req, res) => {
       if(!p) return out(res, 404, { error: '尚未创建角色' });
       return out(res, 200, { gold: p.gold, backpack: buildBackpack(u.id) });
     }
-    if(path === '/api/rpg/equip' && method === 'POST'){
+    if(path === '/api/rpg/equipment' && method === 'GET'){
+      const p = getPlayer(u.id);
+      if(!p) return out(res, 404, { error: '尚未创建角色' });
+      const c = buildCharacter(u.id);
+      const eqList = (buildBackpack(u.id).equipment || []).map(it => ({ id: it.id, name: it.name, type: it.type, quality: it.quality, stats: it.stats, desc: it.desc, location: 'backpack' }));
+      return out(res, 200, { power: c.power, gold: p.gold, equipped: c.equipped, equipment: eqList });
+    }
+    if(path === '/api/rpg/equipment/equip' && method === 'POST'){
       const b = await body(req);
-      const item = get('SELECT * FROM items WHERE id=? AND owner_id=?', Number(b.item_id) || 0, u.id);
+      const item = get('SELECT * FROM items WHERE id=?', Number(b.item_id) || 0);
       if(!item) return out(res, 404, { error: '物品不存在' });
+      if(item.owner_id !== u.id) return out(res, 400, { error: '无权穿戴该物品' });
       if(!['weapon','armor','accessory'].includes(item.type)) return out(res, 400, { error: '该物品无法装备' });
       if(item.location !== 'backpack') return out(res, 400, { error: '该物品不在背包中' });
       const target = 'equipped_' + item.type;
       const old = get('SELECT id FROM items WHERE owner_id=? AND location=?', u.id, target);
-      if(old) stmt('UPDATE items SET location=? WHERE id=?', 'backpack', old.id);
+      if(old) return out(res, 400, { error: '已有同类装备，请先卸下' });
+      stmt('UPDATE items SET location=? WHERE id=?', target, item.id);
+      return out(res, 200, { ok:true, character: buildCharacter(u.id) });
+    }
+    if(path === '/api/rpg/equipment/unequip' && method === 'POST'){
+      const b = await body(req);
+      const item = get('SELECT * FROM items WHERE id=?', Number(b.item_id) || 0);
+      if(!item) return out(res, 404, { error: '物品不存在' });
+      if(item.owner_id !== u.id) return out(res, 400, { error: '无权卸下该物品' });
+      if(!item.location.startsWith('equipped_')) return out(res, 400, { error: '该物品不在装备栏' });
+      stmt('UPDATE items SET location=? WHERE id=?', 'backpack', item.id);
+      return out(res, 200, { ok:true, character: buildCharacter(u.id) });
+    }
+    /* 旧路径兼容：/api/rpg/equip、/api/rpg/unequip（同逻辑，互斥改为 400） */
+    if(path === '/api/rpg/equip' && method === 'POST'){
+      const b = await body(req);
+      const item = get('SELECT * FROM items WHERE id=?', Number(b.item_id) || 0);
+      if(!item) return out(res, 404, { error: '物品不存在' });
+      if(item.owner_id !== u.id) return out(res, 400, { error: '无权穿戴该物品' });
+      if(!['weapon','armor','accessory'].includes(item.type)) return out(res, 400, { error: '该物品无法装备' });
+      if(item.location !== 'backpack') return out(res, 400, { error: '该物品不在背包中' });
+      const target = 'equipped_' + item.type;
+      const old = get('SELECT id FROM items WHERE owner_id=? AND location=?', u.id, target);
+      if(old) return out(res, 400, { error: '已有同类装备，请先卸下' });
       stmt('UPDATE items SET location=? WHERE id=?', target, item.id);
       return out(res, 200, { ok:true, character: buildCharacter(u.id) });
     }
     if(path === '/api/rpg/unequip' && method === 'POST'){
       const b = await body(req);
-      const item = get('SELECT * FROM items WHERE id=? AND owner_id=?', Number(b.item_id) || 0, u.id);
+      const item = get('SELECT * FROM items WHERE id=?', Number(b.item_id) || 0);
       if(!item) return out(res, 404, { error: '物品不存在' });
+      if(item.owner_id !== u.id) return out(res, 400, { error: '无权卸下该物品' });
       if(!item.location.startsWith('equipped_')) return out(res, 400, { error: '该物品不在装备栏' });
       stmt('UPDATE items SET location=? WHERE id=?', 'backpack', item.id);
       return out(res, 200, { ok:true, character: buildCharacter(u.id) });
@@ -1119,7 +1166,7 @@ function rollDropQuality(tableKey, bonusPct, boost){
     if(r <= 0){ pick = q; break; }
   }
   if(!pick) return null;
-  const idx = Math.min(3, QUALITY_ORDER.indexOf(pick) + boost);
+  const idx = Math.min(4, QUALITY_ORDER.indexOf(pick) + boost);
   return QUALITY_ORDER[idx];
 }
 
@@ -1545,8 +1592,17 @@ function handleDungeonSettle(req, res, u){
     stmt('UPDATE player SET cur_hp=? WHERE user_id=?', fullHp, u.id);
   }
   const completedEvents = Math.min(s.idx, s.events.length);
-  recordDungeonRun(u.id, s.chapter, !s.failed && completedEvents >= s.events.length);
-  const rnd = (!s.failed && completedEvents >= s.events.length) ? maybeTriggerRandomEvent(u.id) : null;
+  const cleared = !s.failed && completedEvents >= s.events.length;
+  /* P3：副本通关必掉 1 件装备（品质随层数提升）；战斗中已掉装备则不重复补 */
+  if(cleared && !s.drops.some(d => ['weapon','armor','accessory'].includes(d.type))){
+    const cfg = CHAPTER_CONFIG[s.chapter] || CHAPTER_CONFIG[1];
+    const proto = cfg.equip[randInt(0, cfg.equip.length - 1)];
+    const q = rollDropQuality(s.chapter >= 2 ? 'boss1' : 'box', 0, 0) || 'normal';
+    addItem(u.id, proto.name, proto.type, q, proto.stats, 'backpack', 1);
+    s.drops.push({ name: proto.name, type: proto.type, quality: q, quantity: 1, guaranteed: true });
+  }
+  recordDungeonRun(u.id, s.chapter, cleared);
+  const rnd = cleared ? maybeTriggerRandomEvent(u.id) : null;
   return out(res, 200, {
     ok: true, chapter: s.chapter, total_events: s.events.length, completed_events: completedEvents,
     boss_killed: s.bossKilled, failed: s.failed, failed_at: s.failedAt, exp: s.exp, gold: s.gold,
@@ -1575,7 +1631,7 @@ function handleDungeonInfo(req, res, u){
   const chapter = Number(new URL(req.url, 'http://x').searchParams.get('chapter')) || 1;
   const cfg = CHAPTER_CONFIG[chapter];
   if(!cfg) return out(res, 404, { error: '章节不存在' });
-  const qcn = { normal: '普通', fine: '优良', superb: '精良', rare: '稀有' };
+  const qcn = { normal: '普通', fine: '优良', superb: '精良', rare: '稀有', legendary: '传说' };
   const pct = n => (n * 100).toFixed(n >= 0.1 ? 0 : 1) + '%';
   const equipNames = cfg.equip.map(e => e.name).slice(0, 3).join('、');
   const tierDrop = (tierKey, label) => {
@@ -1586,6 +1642,7 @@ function handleDungeonInfo(req, res, u){
     tierDrop('normal', '普通战斗'),
     tierDrop('elite', '精英战斗'),
     tierDrop(cfg.drop, 'Boss战（' + cfg.boss + '）'),
+    { name: '通关必掉', items: [{ name: chapter >= 2 ? '优良以上品质装备' : '装备（品质随层数提升）', rate: '必定掉落', note: '通关结算必得 1 件' }] },
     { name: '材料掉落', items: [
       { name: cfg.normal_mat[0] + ' 等', rate: '必定掉落', note: '普通战必得 1 份' },
       { name: '黑狼牙', rate: '精英/Boss 必得', note: '' }

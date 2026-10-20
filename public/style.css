@@ -411,9 +411,14 @@ textarea.uploading{border-color:var(--mint)!important;opacity:.8}
 .q-fine{color:#7dd3fc;background:#38bdf822;border:1px solid #38bdf855}
 .q-superb{color:#d8b4fe;background:#a78bfa22;border:1px solid #a78bfa55}
 .q-rare{color:#fcd34d;background:#f59e0b22;border:1px solid #f59e0b66}
+.q-legendary{color:#ffe08a;background:linear-gradient(135deg,#f59e0b33,#ffd70033);border:1px solid #ffd70088;text-shadow:0 0 6px #ffd70055}
 .item-card.q-fine,.equip-slot .q-fine,.slot-item.q-fine{border-color:#38bdf866}
 .item-card.q-superb,.slot-item.q-superb{border-color:#a78bfa77}
 .item-card.q-rare,.slot-item.q-rare{border-color:#f59e0b88}
+.item-card.q-legendary,.slot-item.q-legendary{border-color:#ffd700aa}
+.power-row{display:flex;align-items:center;justify-content:space-between;font-size:13px;color:#ffe08a;margin-top:8px;padding:6px 10px;border-radius:10px;background:#ffd70012;border:1px solid #ffd70033}
+.power-row b{font-size:18px;color:#ffd700}
+.slot-desc,.item-desc{font-size:12px;color:#94a3b8;margin:4px 0 6px;line-height:1.5}
 
 /* ---- 通用 tab ---- */
 .tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}

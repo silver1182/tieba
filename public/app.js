@@ -78,8 +78,12 @@ $('#modalRoot')?.addEventListener('click', e => {
 });
 
 /* ---------- RPG 展示辅助 ---------- */
-const QUALITY_CN = { normal: '普通', fine: '优良', superb: '精良', rare: '稀有' };
-const QUALITY_CLASS = { normal: 'q-normal', fine: 'q-fine', superb: 'q-superb', rare: 'q-rare' };
+const QUALITY_CN = { normal: '普通', fine: '优良', superb: '精良', rare: '稀有', legendary: '传说' };
+const QUALITY_CLASS = { normal: 'q-normal', fine: 'q-fine', superb: 'q-superb', rare: 'q-rare', legendary: 'q-legendary' };
+/* 战力兜底：后端未返回 power 时按属性估算（生命 + 攻×3 + 防×2 + 暴击×1.5 + 爆伤×0.5 + 金币加成×2） */
+function calcPower(c) {
+  return Math.floor((c.max_hp || 0) + (c.attack || 0) * 3 + (c.defense || 0) * 2 + (c.crit_rate || 0) * 1.5 + (c.crit_dmg || 0) * 0.5 + (c.gold_bonus || 0) * 2);
+}
 const TYPE_CN = { weapon: '武器', armor: '护甲', accessory: '饰品', consumable: '消耗品', material: '材料', quest: '任务物品' };
 const TYPE_ICO = { weapon: '⚔️', armor: '🛡️', accessory: '📿', consumable: '🧪', material: '🪵', quest: '🗺️' };
 const RACE_INFO = {
@@ -541,6 +545,7 @@ function renderCharacter(c, st, dt) {
         <div class="gold-big">🪙 ${c.gold}</div>
       </div>
       <div class="hp-row"><span>生命</span><div class="hp-bar"><i style="width:${hpPct}%"></i></div><span class="v-hp">${c.cur_hp} / ${c.max_hp}</span></div>
+      <div class="power-row"><span>战力</span><b class="v-power">${c.power != null ? c.power : calcPower(c)}</b></div>
     </section>
 
     <section class="panel glass">
@@ -569,6 +574,7 @@ function renderCharacter(c, st, dt) {
               <div class="slot-item ${QUALITY_CLASS[it.quality] || 'q-normal'}">
                 <div class="slot-name">${esc(it.name)} ${qualityBadge(it.quality)}</div>
                 <div class="slot-stats">${statsText(it.stats)}</div>
+                ${it.desc ? `<div class="slot-desc">${esc(it.desc)}</div>` : ''}
                 <button class="ghost sm" data-action="unequip" data-id="${it.id}">卸下</button>
               </div>` : `<div class="slot-empty">空位</div>`}
           </div>`;
@@ -628,6 +634,7 @@ function renderBackpackList() {
         <div class="item-ico">${TYPE_ICO[it.type] || '📦'}</div>
         <div class="item-name">${esc(it.name)} ${qualityBadge(it.quality)}</div>
         <div class="item-stats">${statsText(it.stats)}</div>
+        ${it.desc ? `<div class="item-desc">${esc(it.desc)}</div>` : ''}
         <button class="primary sm" data-action="equip" data-id="${it.id}">装备</button>
       </div>`).join('')}</div>`;
   } else {
@@ -643,19 +650,20 @@ function renderBackpackList() {
 
 async function equipItem(id) {
   try {
-    const d = await api('/api/rpg/equip', { method: 'POST', body: { item_id: Number(id) } });
+    const d = await api('/api/rpg/equipment/equip', { method: 'POST', body: { item_id: Number(id) } });
     rpg.char = d.character; rpg.gold = d.character.gold; updateGold();
-    toast('装备成功');
+    toast('装备成功，战力 ' + d.character.power);
     await viewBackpack();
   } catch (e) { toast(e.message, true); }
 }
 
 async function unequipItem(id) {
   try {
-    const d = await api('/api/rpg/unequip', { method: 'POST', body: { item_id: Number(id) } });
+    const d = await api('/api/rpg/equipment/unequip', { method: 'POST', body: { item_id: Number(id) } });
     rpg.char = d.character; rpg.gold = d.character.gold; updateGold();
-    toast('已卸下装备');
-    viewCharacter();
+    toast('已卸下装备，战力 ' + d.character.power);
+    const view = document.querySelector('[data-view].active')?.dataset.view;
+    if (view === 'backpack') await viewBackpack(); else viewCharacter();
   } catch (e) { toast(e.message, true); }
 }
 
