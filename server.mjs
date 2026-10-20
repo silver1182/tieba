@@ -93,6 +93,43 @@ db.exec(`
     expires_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_market_status ON marketplace(status, expires_at);
+  /* 交易行（P4）：在售挂单 / 成交记录 */
+  CREATE TABLE IF NOT EXISTS market_listings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    seller_id INTEGER NOT NULL,
+    seller_name TEXT NOT NULL DEFAULT '',
+    item_id INTEGER NOT NULL,
+    item_name TEXT NOT NULL,
+    item_type TEXT NOT NULL,
+    item_quality TEXT NOT NULL DEFAULT 'normal',
+    item_stats TEXT NOT NULL DEFAULT '{}',
+    quantity INTEGER NOT NULL DEFAULT 1,
+    price INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    created INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_listings_status ON market_listings(status, expires_at);
+  CREATE INDEX IF NOT EXISTS idx_listings_seller ON market_listings(seller_id, status);
+  CREATE TABLE IF NOT EXISTS market_trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    listing_id INTEGER NOT NULL,
+    seller_id INTEGER NOT NULL,
+    seller_name TEXT NOT NULL DEFAULT '',
+    buyer_id INTEGER NOT NULL,
+    buyer_name TEXT NOT NULL DEFAULT '',
+    item_name TEXT NOT NULL,
+    item_type TEXT NOT NULL,
+    item_quality TEXT NOT NULL DEFAULT 'normal',
+    item_stats TEXT NOT NULL DEFAULT '{}',
+    quantity INTEGER NOT NULL DEFAULT 1,
+    price INTEGER NOT NULL,
+    fee INTEGER NOT NULL DEFAULT 0,
+    seller_gain INTEGER NOT NULL DEFAULT 0,
+    created INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_trades_buyer ON market_trades(buyer_id, created);
+  CREATE INDEX IF NOT EXISTS idx_trades_seller ON market_trades(seller_id, created);
   /* 章节目标（P0）：目标定义 / 领取记录 / 动态统计辅助表 */
   CREATE TABLE IF NOT EXISTS chapter_goals (
     id INTEGER PRIMARY KEY,
@@ -489,9 +526,9 @@ const SHOP_ITEMS = {
   '黑狼牙': { type:'material', price:30 },
   '净化碎片': { type:'material', price:35 }
 };
-/* 交易行：24 小时保存、10% 手续费 */
-const MARKET_FEE = 0.10;
-const MARKET_DURATION = 24 * 3600 * 1000;
+/* 交易行（P4）：48 小时保存、5% 手续费 */
+const MARKET_FEE = 0.05;
+const MARKET_DURATION = 48 * 3600 * 1000;
 /* 地底商人随机商品池（每次出现随机 3 件，只能买 1 件） */
 const MERCHANT_GOODS = [
   { name:'小型药水', type:'consumable', quality:'normal', stats:{ heal_pct:30 }, price:20 },
@@ -1817,20 +1854,43 @@ async function handleShopBuy(req, res, u){
 function orderToPayload(row){
   return {
     id: row.id, seller_id: row.seller_id, seller_name: row.seller_name,
-    item_name: row.item_name, item_type: row.item_type, item_quality: row.item_quality,
-    item_stats: safeJson(row.item_stats, {}), quantity: row.quantity, price: row.price,
+    item_id: row.item_id, item_name: row.item_name, item_type: row.item_type,
+    item_quality: row.item_quality, item_stats: safeJson(row.item_stats, {}),
+    quantity: row.quantity, price: row.price,
     status: row.status, created: row.created, expires_at: row.expires_at
   };
+}
+/* 交易行（P4）：过期挂单自动下架并归还物品给卖家 */
+function expireMarketListings(){
+  const expired = all('SELECT * FROM market_listings WHERE status=? AND expires_at<=?', 'active', now());
+  if(!expired.length) return 0;
+  for(const row of expired){
+    addItem(row.seller_id, row.item_name, row.item_type, row.item_quality, safeJson(row.item_stats, {}), 'backpack', row.quantity);
+    stmt('UPDATE market_listings SET status=? WHERE id=?', 'expired', row.id);
+  }
+  return expired.length;
 }
 async function handleMarketList(req, res, u){
   const p = getPlayer(u.id);
   if(!p) return out(res, 404, { error: '尚未创建角色' });
-  stmt('UPDATE marketplace SET status=? WHERE status=? AND expires_at<=?', 'expired', 'active', now());
-  const rows = all('SELECT * FROM marketplace WHERE status=? ORDER BY created DESC LIMIT 100', 'active');
+  expireMarketListings();
+  const url = new URL(req.url, 'http://x');
+  const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
+  const pageSize = Math.min(50, Math.max(1, Number(url.searchParams.get('page_size')) || 20));
+  const type = url.searchParams.get('type') || '';
+  const quality = url.searchParams.get('quality') || '';
+  const sort = url.searchParams.get('sort') || 'newest';
+  const where = ['status=?'];
+  const args = ['active'];
+  if(['weapon','armor','accessory','material'].includes(type)){ where.push('item_type=?'); args.push(type); }
+  if(['normal','fine','superb','rare','legendary'].includes(quality)){ where.push('item_quality=?'); args.push(quality); }
+  const orderBy = sort === 'price_asc' ? 'price ASC, created DESC' : sort === 'price_desc' ? 'price DESC, created DESC' : 'created DESC, id DESC';
+  const total = Number(get(`SELECT COUNT(*) AS c FROM market_listings WHERE ${where.join(' AND ')}`, ...args).c) || 0;
+  const rows = all(`SELECT * FROM market_listings WHERE ${where.join(' AND ')} ORDER BY ${orderBy} LIMIT ? OFFSET ?`, ...args, pageSize, (page - 1) * pageSize);
   return out(res, 200, {
-    fee_rate: MARKET_FEE, duration_hours: 24,
-    orders: rows.map(orderToPayload),
-    my_active: rows.filter(r => r.seller_id === u.id).map(orderToPayload)
+    fee_rate: MARKET_FEE, duration_hours: 48,
+    total, page, page_size: pageSize,
+    orders: rows.map(orderToPayload)
   });
 }
 async function handleMarketCreate(req, res, u){
@@ -1846,44 +1906,62 @@ async function handleMarketCreate(req, res, u){
   let quantity = 1;
   if(item.type === 'material') quantity = Math.max(1, Math.min(item.quantity, Number(b.quantity) || 1));
   const expires_at = now() + MARKET_DURATION;
-  const r = stmt('INSERT INTO marketplace(seller_id,seller_name,item_name,item_type,item_quality,item_stats,quantity,price,status,created,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
-    u.id, p.username || '玩家', item.name, item.type, item.quality, JSON.stringify(safeJson(item.stats, {})), quantity, price, 'active', now(), expires_at);
   consumeItem(u.id, item.id, quantity);
-  return out(res, 201, { ok: true, order_id: Number(r.lastInsertRowid), item_name: item.name, item_type: item.type, quantity, price, expires_at });
+  const r = stmt('INSERT INTO market_listings(seller_id,seller_name,item_id,item_name,item_type,item_quality,item_stats,quantity,price,status,created,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+    u.id, p.username || '玩家', item.id, item.name, item.type, item.quality, JSON.stringify(safeJson(item.stats, {})), quantity, price, 'active', now(), expires_at);
+  return out(res, 201, { ok: true, order_id: Number(r.lastInsertRowid), item_name: item.name, item_type: item.type, item_quality: item.quality, quantity, price, expires_at });
+}
+async function handleMarketMine(req, res, u){
+  const p = getPlayer(u.id);
+  if(!p) return out(res, 404, { error: '尚未创建角色' });
+  expireMarketListings();
+  const rows = all('SELECT * FROM market_listings WHERE seller_id=? ORDER BY created DESC, id DESC', u.id);
+  return out(res, 200, {
+    fee_rate: MARKET_FEE, duration_hours: 48,
+    orders: rows.map(orderToPayload)
+  });
 }
 async function handleMarketBuy(req, res, u){
   const b = await body(req);
   const p = getPlayer(u.id);
   if(!p) return out(res, 404, { error: '尚未创建角色' });
-  const order = get('SELECT * FROM marketplace WHERE id=? AND status=?', Number(b.order_id) || 0, 'active');
-  if(!order) return out(res, 404, { error: '订单不存在或已失效' });
+  expireMarketListings();
+  const order = get('SELECT * FROM market_listings WHERE id=?', Number(b.order_id) || 0);
+  if(!order || order.status !== 'active') return out(res, 400, { error: '订单不存在或已失效' });
   if(order.expires_at <= now()){
-    stmt('UPDATE marketplace SET status=? WHERE id=?', 'expired', order.id);
+    addItem(order.seller_id, order.item_name, order.item_type, order.item_quality, safeJson(order.item_stats, {}), 'backpack', order.quantity);
+    stmt('UPDATE market_listings SET status=? WHERE id=?', 'expired', order.id);
     return out(res, 410, { error: '订单已过期' });
   }
   if(order.seller_id === u.id) return out(res, 400, { error: '不能购买自己的挂单' });
   if(p.gold < order.price) return out(res, 400, { error: '金币不足' });
   const seller = getPlayer(order.seller_id);
-  p.gold -= order.price;
-  stmt('UPDATE player SET gold=? WHERE user_id=?', p.gold, u.id);
   const fee = Math.floor(order.price * MARKET_FEE);
-  if(seller) stmt('UPDATE player SET gold=gold+? WHERE user_id=?', order.price - fee, seller.user_id);
+  const sellerGain = order.price - fee;
+  stmt('UPDATE player SET gold=? WHERE user_id=?', p.gold - order.price, u.id);
+  if(seller) stmt('UPDATE player SET gold=gold+? WHERE user_id=?', sellerGain, seller.user_id);
   addItem(u.id, order.item_name, order.item_type, order.item_quality, safeJson(order.item_stats, {}), 'backpack', order.quantity);
-  stmt('UPDATE marketplace SET status=? WHERE id=?', 'sold', order.id);
-  return out(res, 201, { ok: true, order_id: order.id, name: order.item_name, quantity: order.quantity, cost: order.price, fee, gold: p.gold });
+  stmt('UPDATE market_listings SET status=? WHERE id=?', 'sold', order.id);
+  stmt('INSERT INTO market_trades(listing_id,seller_id,seller_name,buyer_id,buyer_name,item_name,item_type,item_quality,item_stats,quantity,price,fee,seller_gain,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    order.id, order.seller_id, order.seller_name || '玩家', u.id, p.username || '玩家',
+    order.item_name, order.item_type, order.item_quality, order.item_stats, order.quantity, order.price, fee, sellerGain, now());
+  return out(res, 201, { ok: true, order_id: order.id, name: order.item_name, quantity: order.quantity, cost: order.price, fee, seller_gain: sellerGain, gold: p.gold - order.price });
 }
 async function handleMarketCancel(req, res, u){
   const b = await body(req);
   const p = getPlayer(u.id);
   if(!p) return out(res, 404, { error: '尚未创建角色' });
-  const order = get('SELECT * FROM marketplace WHERE id=? AND seller_id=? AND status=?', Number(b.order_id) || 0, u.id, 'active');
-  if(!order) return out(res, 404, { error: '订单不存在或不可取消' });
+  expireMarketListings();
+  const order = get('SELECT * FROM market_listings WHERE id=?', Number(b.order_id) || 0);
+  if(!order || order.status !== 'active') return out(res, 400, { error: '订单不存在或已失效' });
+  if(order.seller_id !== u.id) return out(res, 400, { error: '不能下架他人的挂单' });
   if(order.expires_at <= now()){
-    stmt('UPDATE marketplace SET status=? WHERE id=?', 'expired', order.id);
+    addItem(u.id, order.item_name, order.item_type, order.item_quality, safeJson(order.item_stats, {}), 'backpack', order.quantity);
+    stmt('UPDATE market_listings SET status=? WHERE id=?', 'expired', order.id);
     return out(res, 410, { error: '订单已过期' });
   }
   addItem(u.id, order.item_name, order.item_type, order.item_quality, safeJson(order.item_stats, {}), 'backpack', order.quantity);
-  stmt('UPDATE marketplace SET status=? WHERE id=?', 'cancelled', order.id);
+  stmt('UPDATE market_listings SET status=? WHERE id=?', 'cancelled', order.id);
   return out(res, 200, { ok: true, order_id: order.id });
 }
 
@@ -1915,6 +1993,8 @@ async function handleMarketCancel(req, res, u){
     if(path === '/api/rpg/shop/items' && method === 'GET') return await handleShopItems(req, res, u);
     if(path === '/api/rpg/shop/buy' && method === 'POST') return await handleShopBuy(req, res, u);
     if(path === '/api/rpg/market/list' && method === 'GET') return await handleMarketList(req, res, u);
+    if(path === '/api/rpg/market/listings' && method === 'GET') return await handleMarketList(req, res, u);
+    if(path === '/api/rpg/market/mine' && method === 'GET') return await handleMarketMine(req, res, u);
     if(path === '/api/rpg/market/create' && method === 'POST') return await handleMarketCreate(req, res, u);
     if(path === '/api/rpg/market/buy' && method === 'POST') return await handleMarketBuy(req, res, u);
     if(path === '/api/rpg/market/cancel' && method === 'POST') return await handleMarketCancel(req, res, u);

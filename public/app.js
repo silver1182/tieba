@@ -132,6 +132,9 @@ let forgeBusy = false;
 let dungeonSession = null; // { chapter, events, idx } 前端副本会话缓存
 let pendingRandomEvent = null; // { id,title,desc,choices } P2 随机事件待处理缓存
 let chatOpen = window.matchMedia('(min-width: 1025px)').matches;
+let currentMarketTab = 'all'; // 交易行：在售 / 我的
+let marketBusy = false; // 交易行请求互斥
+let marketPage = 1; // 交易行当前页
 
 /* ---------- 导航 ---------- */
 function setNav(view) {
@@ -144,6 +147,7 @@ function switchView(view) {
   else if (view === 'dungeon') viewDungeon();
   else if (view === 'forge') viewForge();
   else if (view === 'shop') viewShop();
+  else if (view === 'market') viewMarket();
 }
 
 /* ---------- 全局事件委托 ---------- */
@@ -171,6 +175,14 @@ document.addEventListener('click', async e => {
   else if (a === 'shop-tab') { currentShopTab = el.dataset.tab; renderShopList(); }
   else if (a === 'shop-qty') updateShopQty(el.dataset.index);
   else if (a === 'shop-buy') shopBuy(Number(el.dataset.index));
+  else if (a === 'market-tab') { currentMarketTab = el.dataset.tab; marketPage = 1; renderMarketAll(); }
+  else if (a === 'market-filter') { marketPage = 1; renderMarketAll(); }
+  else if (a === 'market-page') { marketPage = Number(el.dataset.page); renderMarketList(); }
+  else if (a === 'market-sell') openMarketSell();
+  else if (a === 'market-sell-item') selectMarketSellItem(Number(el.dataset.index));
+  else if (a === 'market-sell-submit') submitMarketSell();
+  else if (a === 'market-buy') marketBuy(Number(el.dataset.id));
+  else if (a === 'market-cancel') marketCancel(Number(el.dataset.id));
   else if (a === 'go-backpack') { closeModal(); switchView('backpack'); }
   else if (a === 'open-profile') { switchView('profile'); }
   else if (a === 'close-modal') closeModal();
@@ -1389,6 +1401,231 @@ async function shopBuy(index) {
 }
 
 /* ================================================================
+ * RPG —— 交易行（P4）
+ * ================================================================ */
+const MARKET_STATUS_CN = { active: '在售', sold: '已售出', cancelled: '已下架', expired: '已过期' };
+async function viewMarket() {
+  setNav('market');
+  $('#view').innerHTML = '<p class="empty-tip">加载中…</p>';
+  try {
+    const b = await api('/api/rpg/backpack');
+    rpg.backpack = b.backpack;
+    rpg.gold = b.gold;
+    updateGold();
+    const mine = await api('/api/rpg/market/mine');
+    rpg.market = { listings: null, mine: mine.orders || [], total: 0, fee_rate: mine.fee_rate || 0.05 };
+    $('#view').innerHTML = `
+      <div class="page-title"><h2>交易行</h2><p class="muted">装备与材料自由交易 · 手续费 ${Math.round((rpg.market.fee_rate || 0.05) * 100)}% · 挂单保留 48 小时</p></div>
+      <div class="tabs" id="marketTabs">
+        <button data-action="market-tab" data-tab="all">在售列表</button>
+        <button data-action="market-tab" data-tab="mine">我的挂单</button>
+      </div>
+      <div id="marketList"></div>`;
+    currentMarketTab = 'all';
+    marketPage = 1;
+    renderMarketAll();
+  } catch (e) { toast(e.message, true); $('#view').innerHTML = '<p class="empty-tip">加载失败</p>'; }
+}
+function renderMarketAll() {
+  if (currentMarketTab === 'mine') renderMarketMine();
+  else renderMarketList();
+}
+async function renderMarketList() {
+  $$('#marketTabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === 'all'));
+  const wrap = $('#marketList');
+  if (!wrap) return;
+  const type = $('#mfilter-type')?.value || '';
+  const quality = $('#mfilter-quality')?.value || '';
+  const sort = $('#mfilter-sort')?.value || 'newest';
+  try {
+    const q = new URLSearchParams({ page: marketPage, page_size: 20, type, quality, sort });
+    const d = await api('/api/rpg/market/listings?' + q.toString());
+    rpg.market.listings = d;
+    rpg.gold = d.gold !== undefined ? d.gold : rpg.gold;
+    updateGold();
+    const totalPages = Math.max(1, Math.ceil(d.total / d.page_size));
+    wrap.innerHTML = `
+      <div class="market-toolbar">
+        <select id="mfilter-type" data-action="market-filter">
+          <option value="">全部类型</option>
+          <option value="weapon" ${type === 'weapon' ? 'selected' : ''}>武器</option>
+          <option value="armor" ${type === 'armor' ? 'selected' : ''}>护甲</option>
+          <option value="accessory" ${type === 'accessory' ? 'selected' : ''}>饰品</option>
+          <option value="material" ${type === 'material' ? 'selected' : ''}>材料</option>
+        </select>
+        <select id="mfilter-quality" data-action="market-filter">
+          <option value="">全部品质</option>
+          <option value="normal" ${quality === 'normal' ? 'selected' : ''}>普通</option>
+          <option value="fine" ${quality === 'fine' ? 'selected' : ''}>优良</option>
+          <option value="superb" ${quality === 'superb' ? 'selected' : ''}>精良</option>
+          <option value="rare" ${quality === 'rare' ? 'selected' : ''}>稀有</option>
+          <option value="legendary" ${quality === 'legendary' ? 'selected' : ''}>传说</option>
+        </select>
+        <select id="mfilter-sort" data-action="market-filter">
+          <option value="newest" ${sort === 'newest' ? 'selected' : ''}>最新上架</option>
+          <option value="price_asc" ${sort === 'price_asc' ? 'selected' : ''}>价格从低到高</option>
+          <option value="price_desc" ${sort === 'price_desc' ? 'selected' : ''}>价格从高到低</option>
+        </select>
+        <button class="primary sm" data-action="market-sell">+ 上架物品</button>
+      </div>
+      <div class="shop-grid">
+        ${(d.orders || []).map(o => {
+          const mine = o.seller_id === ME.id;
+          const stats = o.item_stats && Object.keys(o.item_stats).length ? `<div class="item-stats">${statsText(o.item_stats)}</div>` : '';
+          return `
+          <div class="shop-card glass">
+            <div class="shop-ico">${TYPE_ICO[o.item_type] || '📦'}</div>
+            <div class="shop-name">${esc(o.item_name)} ${qualityBadge(o.item_quality)}${mine ? ' <span class="q-badge q-rare">我的</span>' : ''}</div>
+            <div class="shop-type muted">${TYPE_CN[o.item_type] || o.item_type}${o.quantity > 1 ? ' ×' + o.quantity : ''} · ${esc(o.seller_name)}</div>
+            ${stats}
+            <div class="shop-buy-row">
+              <span class="shop-total muted">🪙 ${o.price}</span>
+              ${mine
+                ? `<button class="ghost sm" data-action="market-cancel" data-id="${o.id}">下架</button>`
+                : `<button class="primary sm" data-action="market-buy" data-id="${o.id}">购买</button>`}
+            </div>
+          </div>`;
+        }).join('') || '<p class="empty-tip">暂无在售物品</p>'}
+      </div>
+      ${totalPages > 1 ? `
+      <div class="market-pager">
+        <button class="ghost sm" data-action="market-page" data-page="${marketPage - 1}" ${marketPage <= 1 ? 'disabled' : ''}>上一页</button>
+        <span class="muted">第 ${marketPage} / ${totalPages} 页</span>
+        <button class="ghost sm" data-action="market-page" data-page="${marketPage + 1}" ${marketPage >= totalPages ? 'disabled' : ''}>下一页</button>
+      </div>` : ''}`;
+  } catch (e) { toast(e.message, true); wrap.innerHTML = '<p class="empty-tip">加载失败</p>'; }
+}
+async function renderMarketMine() {
+  $$('#marketTabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === 'mine'));
+  const wrap = $('#marketList');
+  if (!wrap) return;
+  try {
+    const d = await api('/api/rpg/market/mine');
+    rpg.market.mine = d.orders || [];
+    const active = (d.orders || []).filter(o => o.status === 'active');
+    wrap.innerHTML = `
+      <div class="market-toolbar">
+        <span class="muted">在售 ${active.length} 笔 · 全部 ${(d.orders || []).length} 笔</span>
+        <button class="primary sm" data-action="market-sell">+ 上架物品</button>
+      </div>
+      <div class="shop-grid">
+        ${active.map(o => {
+          const stats = o.item_stats && Object.keys(o.item_stats).length ? `<div class="item-stats">${statsText(o.item_stats)}</div>` : '';
+          return `
+          <div class="shop-card glass">
+            <div class="shop-ico">${TYPE_ICO[o.item_type] || '📦'}</div>
+            <div class="shop-name">${esc(o.item_name)} ${qualityBadge(o.item_quality)}</div>
+            <div class="shop-type muted">${TYPE_CN[o.item_type] || o.item_type}${o.quantity > 1 ? ' ×' + o.quantity : ''} · 在售</div>
+            ${stats}
+            <div class="shop-buy-row">
+              <span class="shop-total muted">🪙 ${o.price}</span>
+              <button class="ghost sm" data-action="market-cancel" data-id="${o.id}">下架</button>
+            </div>
+          </div>`;
+        }).join('') || '<p class="empty-tip">暂无在售挂单，点击“上架物品”出售背包中的装备或材料</p>'}
+      </div>
+      <h3 class="panel-title" style="margin-top:16px">历史记录</h3>
+      <div class="stack-list">
+        ${(d.orders || []).filter(o => o.status !== 'active').map(o => `
+          <div class="stack-row glass">
+            <span class="stack-ico">${TYPE_ICO[o.item_type] || '📦'}</span>
+            <span class="muted">${esc(o.item_name)} ×${o.quantity} · 🪙 ${o.price} · ${MARKET_STATUS_CN[o.status] || o.status}</span>
+          </div>`).join('') || '<p class="empty-tip">暂无历史记录</p>'}
+      </div>`;
+  } catch (e) { toast(e.message, true); wrap.innerHTML = '<p class="empty-tip">加载失败</p>'; }
+}
+let marketSellItems = []; // 上架候选：背包可交易物品
+let marketSellSel = -1; // 上架弹窗选中的候选下标
+async function openMarketSell() {
+  try {
+    const b = await api('/api/rpg/backpack');
+    marketSellItems = ((b.backpack && b.backpack.equipment) || []).map(it => ({ ...it, sellQty: 1 }))
+      .concat(((b.backpack && b.backpack.material) || []).map(it => ({ ...it, sellQty: 1 })));
+    marketSellSel = -1;
+    if (!marketSellItems.length) { toast('背包中没有可交易的装备或材料', true); return; }
+    renderMarketSellModal();
+  } catch (e) { toast(e.message, true); }
+}
+function renderMarketSellModal() {
+  openModal(`
+    <h3 class="modal-title">上架物品</h3>
+    <div class="modal-body">
+      <div class="sell-cands">
+        ${marketSellItems.map((it, idx) => `
+          <div class="sell-cand ${marketSellSel === idx ? 'selected' : ''}" data-action="market-sell-item" data-index="${idx}">
+            <span class="stack-ico">${TYPE_ICO[it.type] || '📦'}</span>
+            <span>${esc(it.name)} ${qualityBadge(it.quality)}</span>
+            <span class="muted">×${it.quantity}${it.type === 'material' ? '（可上架部分）' : ''}</span>
+          </div>`).join('')}
+      </div>
+      ${marketSellSel >= 0 ? `
+      <div class="sell-form">
+        <label class="field"><span>数量</span>
+          <input type="number" id="sellQty" value="${marketSellItems[marketSellSel].sellQty}" min="1" max="${marketSellItems[marketSellSel].quantity}" ${marketSellItems[marketSellSel].type === 'material' ? '' : 'disabled'}>
+        </label>
+        <label class="field"><span>单价（金币）</span>
+          <input type="number" id="sellPrice" value="100" min="1" max="500000">
+        </label>
+        <p class="muted">成交后收取 5% 手续费，卖家实得 95%</p>
+      </div>` : '<p class="muted">请选择要出售的物品</p>'}
+    </div>
+    <div class="modal-actions">
+      <button class="primary" data-action="market-sell-submit" ${marketSellSel < 0 ? 'disabled' : ''}>确认上架</button>
+      <button class="ghost" data-action="close-modal">取消</button>
+    </div>`);
+  if (marketSellSel >= 0) {
+    const it = marketSellItems[marketSellSel];
+    const q = $('#sellQty');
+    if (q) q.addEventListener('input', () => { it.sellQty = Math.max(1, Math.min(it.quantity, Number(q.value) || 1)); q.value = it.sellQty; });
+  }
+}
+function selectMarketSellItem(idx) {
+  marketSellSel = idx;
+  renderMarketSellModal();
+}
+async function submitMarketSell() {
+  if (marketBusy) return;
+  if (marketSellSel < 0) return;
+  const it = marketSellItems[marketSellSel];
+  const price = Number($('#sellPrice')?.value || 0);
+  if (!price || price < 1 || price > 500000) { toast('价格须在 1-500000 之间', true); return; }
+  const quantity = it.type === 'material' ? it.sellQty || 1 : 1;
+  marketBusy = true;
+  try {
+    const d = await api('/api/rpg/market/create', { method: 'POST', body: { item_id: it.id, price, quantity } });
+    closeModal();
+    toast(`已上架 ${d.item_name}${d.quantity > 1 ? ' ×' + d.quantity : ''}，定价 🪙 ${d.price}`);
+    const b = await api('/api/rpg/backpack');
+    rpg.backpack = b.backpack;
+    rpg.gold = b.gold;
+    updateGold();
+    renderMarketAll();
+  } catch (e) { toast(e.message, true); } finally { marketBusy = false; }
+}
+async function marketBuy(id) {
+  if (marketBusy) return;
+  marketBusy = true;
+  try {
+    const d = await api('/api/rpg/market/buy', { method: 'POST', body: { order_id: id } });
+    rpg.gold = d.gold;
+    updateGold();
+    refreshBackpack();
+    toast(`购买成功：${d.name} ×${d.quantity}，花费 🪙 ${d.cost}（含手续费 🪙 ${d.fee}）`);
+    renderMarketAll();
+  } catch (e) { toast(e.message, true); } finally { marketBusy = false; }
+}
+async function marketCancel(id) {
+  if (marketBusy) return;
+  marketBusy = true;
+  try {
+    await api('/api/rpg/market/cancel', { method: 'POST', body: { order_id: id } });
+    toast('已下架，物品已归还背包');
+    refreshBackpack();
+    renderMarketAll();
+  } catch (e) { toast(e.message, true); } finally { marketBusy = false; }
+}
+
+/* ================================================================
  * 会话 / 启动
  * ================================================================ */
 function updateGold() {
@@ -1447,7 +1684,7 @@ function bindShell() {
 function boot() {
   const navDefs = [
     ['character', '⚔️', '角色'], ['backpack', '🎒', '背包'], ['dungeon', '🗺️', '副本'],
-    ['forge', '🔨', '铁匠铺'], ['shop', '🛒', '商店']
+    ['forge', '🔨', '铁匠铺'], ['shop', '🛒', '商店'], ['market', '🏪', '交易行']
   ];
   const bn = $('#bottomNav');
   if (bn && !bn.children.length) {
