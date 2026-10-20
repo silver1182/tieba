@@ -199,6 +199,26 @@ db.exec(`
     event_id TEXT NOT NULL,
     created INTEGER NOT NULL
   );
+  /* 成就（P5）：成就定义 / 玩家进度与解锁领取记录 */
+  CREATE TABLE IF NOT EXISTS achievements (
+    id INTEGER PRIMARY KEY,
+    code TEXT UNIQUE NOT NULL,
+    type TEXT NOT NULL,
+    name TEXT NOT NULL,
+    desc TEXT NOT NULL DEFAULT '',
+    amount INTEGER NOT NULL DEFAULT 1,
+    reward_gold INTEGER NOT NULL DEFAULT 0,
+    reward_items TEXT NOT NULL DEFAULT '[]',
+    sort INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS achievement_progress (
+    user_id INTEGER NOT NULL,
+    code TEXT NOT NULL,
+    progress INTEGER NOT NULL DEFAULT 0,
+    unlocked_at INTEGER,
+    claimed_at INTEGER,
+    PRIMARY KEY (user_id, code)
+  );
 `);
 
 /* player 自动药水配置迁移（第 5 节：可关闭 / 改阈值 / 改次数） */
@@ -207,6 +227,14 @@ const ensurePlayerCol = (name, ddl) => { if(!playerCols2.includes(name)) db.exec
 ensurePlayerCol('auto_potion', "auto_potion INTEGER NOT NULL DEFAULT 1");
 ensurePlayerCol('potion_threshold', "potion_threshold INTEGER NOT NULL DEFAULT 35");
 ensurePlayerCol('potion_limit', "potion_limit INTEGER NOT NULL DEFAULT 1");
+
+/* player 转生配置迁移（P5：转生次数 / 称号 / 永久加成） */
+ensurePlayerCol('reincarnate_count', "reincarnate_count INTEGER NOT NULL DEFAULT 0");
+ensurePlayerCol('reincarnate_title', "reincarnate_title TEXT NOT NULL DEFAULT ''");
+ensurePlayerCol('reincarnate_bonus_hp', "reincarnate_bonus_hp INTEGER NOT NULL DEFAULT 0");
+ensurePlayerCol('reincarnate_bonus_atk', "reincarnate_bonus_atk INTEGER NOT NULL DEFAULT 0");
+ensurePlayerCol('reincarnate_bonus_def', "reincarnate_bonus_def INTEGER NOT NULL DEFAULT 0");
+ensurePlayerCol('reincarnate_bonus_crit', "reincarnate_bonus_crit INTEGER NOT NULL DEFAULT 0");
 
 /* ========== RPG 数值配置（第 2、3、7 节） ========== */
 const RACE_CONFIG = {
@@ -219,6 +247,22 @@ const INIT_STATS = { level:1, exp:0, gold:0, max_hp:100, cur_hp:100, attack:12, 
 const LEVEL_UP_GROWTH = { max_hp:20, attack:3, defense:1 };
 const START_ITEM = { name:'小木剑', type:'weapon', quality:'normal', stats:{ attack:2 }, location:'equipped_weapon' };
 const ITEM_QUALITY_MULT = { normal:1.00, fine:1.20, superb:1.45, rare:1.75, legendary:2.20 };
+
+/* ========== 长线养成（P5）：等级曲线 1-100 与转生配置 ========== */
+const MAX_LEVEL = 100;
+/* 经验需求分段线性递增：1-10 沿用 level*100，后续四段平滑抬升，100 级满级 */
+function expNeedFor(level){
+  if(level <= 10) return level * 100;
+  if(level <= 20) return Math.floor(1000 + (level - 10) * 150);
+  if(level <= 40) return Math.floor(2500 + (level - 20) * 250);
+  if(level <= 70) return Math.floor(7500 + (level - 40) * 500);
+  return Math.floor(22500 + (level - 70) * 1250);
+}
+const REINCARNATE_TITLES = ['浴火重生', '星火燎原', '百炼成钢', '超凡入圣', '万世轮回'];
+function reincarnateTitle(n){
+  if(!n) return '';
+  return n <= REINCARNATE_TITLES.length ? REINCARNATE_TITLES[n - 1] : '轮回·' + n + '世';
+}
 
 /* ========== 阶段2：副本与战斗配置（第 3/4/6 节） ========== */
 const DUNGEON_DAILY_LIMIT = 5;
@@ -541,7 +585,7 @@ const MERCHANT_GOODS = [
 ];
 
 /* ========== RPG 属性计算（第 2、3 节） ========== */
-function safeJson(s, fb){ try { return JSON.parse(s || '{}'); } catch { return fb; } }
+function safeJson(s, fb){ if(Array.isArray(s)) return s; if(s !== null && typeof s === 'object') return s; try { return JSON.parse(s || '{}'); } catch { return fb; } }
 function getPlayer(userId){ return get('SELECT * FROM player WHERE user_id=?', userId); }
 function getPlayerItems(userId){ return all('SELECT * FROM items WHERE owner_id=? ORDER BY id', userId).map(r => ({ ...r, stats: safeJson(r.stats, {}) })); }
 
@@ -564,11 +608,14 @@ function computeStats(p, items){
   const gold_bonus = p.gold_bonus + sum('gold_bonus');
   return {
     user_id: p.user_id, race: p.race, level: p.level, exp: p.exp,
+    exp_need: expNeedFor(p.level), max_level: MAX_LEVEL,
     gold: p.gold, max_hp: maxHp, cur_hp: p.cur_hp <= 0 ? maxHp : Math.min(p.cur_hp, maxHp),
     attack, defense, crit_rate, crit_dmg, gold_bonus,
     power: calcPower(maxHp, attack, defense, crit_rate, crit_dmg, gold_bonus),
     daily_count: p.daily_count, last_dungeon_date: p.last_dungeon_date, chapter: p.chapter,
-    boss_kills_ch1: p.boss_kills_ch1, boss_kills_ch2: p.boss_kills_ch2, created: p.created
+    boss_kills_ch1: p.boss_kills_ch1, boss_kills_ch2: p.boss_kills_ch2, created: p.created,
+    reincarnate_count: p.reincarnate_count || 0,
+    reincarnate_title: p.reincarnate_title || ''
   };
 }
 /* 伤害计算（第 3 节）：普通=max(1,攻-防)；暴击=普通×爆伤倍率；多减伤相乘；最终向下取整且最低 1 */
@@ -1189,6 +1236,158 @@ async function handleGoalClaim(req, res, u){
   return out(res, 200, { ok: true, goal_id: row.id, rewards, gold: p.gold, character: buildCharacter(u.id) });
 }
 
+/* ========== 成就（P5）：定义表 / 动态进度 / 解锁 / 领取防重复 ========== */
+/* 类型覆盖：level 等级 / dungeon 副本 / boss Boss击杀 / kill 击杀 / collect 装备收集 / trade 交易 / daily 每日任务 / reincarnate 转生 / gold 金币 / encounter 奇遇 */
+const ACHIEVEMENTS = [
+  { code:'level_5',  type:'level',        name:'初出茅庐', desc:'达到 5 级', amount:5, reward_gold:200, reward_items:[] },
+  { code:'level_10', type:'level',        name:'崭露头角', desc:'达到 10 级', amount:10, reward_gold:500, reward_items:[{ box:true }] },
+  { code:'level_20', type:'level',        name:'声名鹊起', desc:'达到 20 级', amount:20, reward_gold:1200, reward_items:[{ name:'精炼黑铁', type:'material', quantity:3 }] },
+  { code:'level_50', type:'level',        name:'名动一方', desc:'达到 50 级', amount:50, reward_gold:3000, reward_items:[{ box:true }] },
+  { code:'level_100',type:'level',        name:'登峰造极', desc:'达到 100 级（满级）', amount:100, reward_gold:10000, reward_items:[{ box:true }] },
+  { code:'dungeon_clear_1',  type:'dungeon', name:'初探灰烬森林', desc:'通关任意副本 1 次', amount:1, reward_gold:300, reward_items:[] },
+  { code:'dungeon_clear_10', type:'dungeon', name:'副本老手', desc:'通关任意副本 10 次', amount:10, reward_gold:1200, reward_items:[{ box:true }] },
+  { code:'dungeon_clear_30', type:'dungeon', name:'副本狂人', desc:'通关任意副本 30 次', amount:30, reward_gold:4000, reward_items:[{ box:true }] },
+  { code:'boss_kill_10', type:'boss', name:'狩猎 Boss', desc:'累计击败 Boss 10 次', amount:10, reward_gold:1500, reward_items:[{ name:'黑狼牙', type:'material', quantity:5 }] },
+  { code:'kill_100', type:'kill', name:'百人斩', desc:'累计击杀 100 只怪物', amount:100, reward_gold:600, reward_items:[{ box:true }] },
+  { code:'kill_500', type:'kill', name:'屠戮者', desc:'累计击杀 500 只怪物', amount:500, reward_gold:2500, reward_items:[{ box:true }] },
+  { code:'equip_collect_10', type:'collect', name:'装备收藏家', desc:'拥有 10 件不同装备', amount:10, reward_gold:500, reward_items:[] },
+  { code:'equip_collect_30', type:'collect', name:'装备大师', desc:'拥有 30 件不同装备', amount:30, reward_gold:2000, reward_items:[{ box:true }] },
+  { code:'trade_1',  type:'trade', name:'初试交易', desc:'完成 1 次交易', amount:1, reward_gold:300, reward_items:[] },
+  { code:'trade_10', type:'trade', name:'商贾之路', desc:'完成 10 次交易', amount:10, reward_gold:1200, reward_items:[{ name:'精制皮革', type:'material', quantity:3 }] },
+  { code:'daily_7',  type:'daily', name:'七日勤勉', desc:'累计完成 7 个每日任务', amount:7, reward_gold:800, reward_items:[] },
+  { code:'daily_30', type:'daily', name:'持之以恒', desc:'累计完成 30 个每日任务', amount:30, reward_gold:3000, reward_items:[{ box:true }] },
+  { code:'reincarnate_1', type:'reincarnate', name:'破茧重生', desc:'完成 1 次转生', amount:1, reward_gold:2000, reward_items:[{ box:true }] },
+  { code:'gold_hold_10000', type:'gold', name:'富甲一方', desc:'持有 10000 金币', amount:10000, reward_gold:1000, reward_items:[] },
+  { code:'encounter_10', type:'encounter', name:'奇遇连连', desc:'累计触发 10 次奇遇', amount:10, reward_gold:300, reward_items:[] }
+];
+function achievementProgressOf(userId, a){
+  const p = getPlayer(userId);
+  if(a.type === 'level') return p ? p.level : 0;
+  if(a.type === 'dungeon'){
+    const r = get('SELECT COUNT(*) AS c FROM dungeon_runs WHERE user_id=? AND win=1', userId);
+    return Number(r.c) || 0;
+  }
+  if(a.type === 'boss'){
+    if(!p) return 0;
+    return Number(p.boss_kills_ch1 || 0) + Number(p.boss_kills_ch2 || 0);
+  }
+  if(a.type === 'kill'){
+    const r = get('SELECT COALESCE(SUM(count),0) AS c FROM monster_kills WHERE user_id=?', userId);
+    return Number(r.c) || 0;
+  }
+  if(a.type === 'collect'){
+    const r = get("SELECT COUNT(DISTINCT name) AS c FROM items WHERE owner_id=? AND type IN ('weapon','armor','accessory')", userId);
+    return Number(r.c) || 0;
+  }
+  if(a.type === 'trade'){
+    const r = get('SELECT COUNT(*) AS c FROM market_trades WHERE buyer_id=? OR seller_id=?', userId, userId);
+    return Number(r.c) || 0;
+  }
+  if(a.type === 'daily'){
+    const r = get('SELECT COUNT(*) AS c FROM daily_task_claims WHERE user_id=?', userId);
+    return Number(r.c) || 0;
+  }
+  if(a.type === 'reincarnate') return p ? (p.reincarnate_count || 0) : 0;
+  if(a.type === 'gold') return p ? p.gold : 0;
+  if(a.type === 'encounter'){
+    const r = get('SELECT COALESCE(SUM(count),0) AS c FROM encounter_log WHERE user_id=?', userId);
+    return Number(r.c) || 0;
+  }
+  return 0;
+}
+/* 计算某成就当前进度并自动解锁（首次达标写入 unlocked_at）；成就解锁后不回收，转生降级仍保留已解锁状态 */
+function achievementPayload(userId, a){
+  const progress = achievementProgressOf(userId, a);
+  const done = progress >= a.amount;
+  let row = get('SELECT * FROM achievement_progress WHERE user_id=? AND code=?', userId, a.code);
+  if(!row && done){
+    stmt('INSERT INTO achievement_progress(user_id,code,progress,unlocked_at,claimed_at) VALUES(?,?,?,?,NULL)', userId, a.code, progress, now());
+    row = get('SELECT * FROM achievement_progress WHERE user_id=? AND code=?', userId, a.code);
+  } else if(row && row.unlocked_at == null && done){
+    stmt('UPDATE achievement_progress SET progress=?, unlocked_at=? WHERE user_id=? AND code=?', progress, now(), userId, a.code);
+    row = get('SELECT * FROM achievement_progress WHERE user_id=? AND code=?', userId, a.code);
+  }
+  return {
+    code: a.code, type: a.type, name: a.name, desc: a.desc,
+    amount: a.amount, reward: { gold: a.reward_gold, items: safeJson(a.reward_items, []) },
+    progress, done,
+    unlocked: !!(row && row.unlocked_at != null),
+    claimed: !!(row && row.claimed_at != null),
+    claimable: !!(row && row.unlocked_at != null && row.claimed_at == null)
+  };
+}
+/* GET /api/rpg/achievements：查询全部成就进度与可领取状态 */
+function handleAchievements(req, res, u){
+  const p = getPlayer(u.id);
+  if(!p) return out(res, 404, { error: '尚未创建角色' });
+  const list = ACHIEVEMENTS.map(a => achievementPayload(u.id, a));
+  return out(res, 200, { total: list.length, unlocked: list.filter(x => x.unlocked).length, achievements: list });
+}
+/* POST /api/rpg/achievements/claim：领取成就奖励（防重复，已领取 400） */
+async function handleAchievementClaim(req, res, u){
+  const b = await body(req);
+  const p = getPlayer(u.id);
+  if(!p) return out(res, 404, { error: '尚未创建角色' });
+  const a = ACHIEVEMENTS.find(x => x.code === String(b.code || ''));
+  if(!a) return out(res, 404, { error: '成就不存在' });
+  const pay = achievementPayload(u.id, a);
+  if(pay.claimed) return out(res, 400, { error: '该成就奖励已领取' });
+  if(!pay.unlocked) return out(res, 400, { error: '成就尚未达成' });
+  const rewards = grantGoalReward(u.id, { chapter: 1, reward_gold: a.reward_gold, reward_items: a.reward_items }, p);
+  stmt('UPDATE achievement_progress SET claimed_at=? WHERE user_id=? AND code=?', now(), u.id, a.code);
+  return out(res, 200, { ok: true, code: a.code, rewards, gold: p.gold, character: buildCharacter(u.id) });
+}
+
+/* ========== 排行榜（P5）：战力 / 等级 / 副本三榜 Top20 ========== */
+/* GET /api/rpg/leaderboard?type=power|level|dungeon */
+function handleLeaderboard(req, res, u){
+  const type = new URL(req.url, 'http://x').searchParams.get('type') || 'power';
+  let rows = [];
+  if(type === 'power'){
+    const players = all('SELECT user_id FROM player');
+    rows = players.map(pl => {
+      const p = getPlayer(pl.user_id);
+      const st = computeStats(p, getPlayerItems(pl.user_id));
+      const un = get('SELECT username, display_name FROM users WHERE id=?', pl.user_id);
+      return { user_id: pl.user_id, username: (un && (un.display_name || un.username)) || '?', value: st ? st.power : 0 };
+    }).sort((a, b) => b.value - a.value).slice(0, 20);
+  } else if(type === 'level'){
+    rows = all(`SELECT p.user_id, u.username, u.display_name, p.level, p.exp FROM player p JOIN users u ON u.id=p.user_id ORDER BY p.level DESC, p.exp DESC LIMIT 20`)
+      .map(r => ({ user_id: r.user_id, username: r.display_name || r.username, value: r.level, level: r.level, exp: r.exp }));
+  } else if(type === 'dungeon'){
+    rows = all(`SELECT d.user_id, u.username, u.display_name, COUNT(*) AS clears FROM dungeon_runs d JOIN users u ON u.id=d.user_id WHERE d.win=1 GROUP BY d.user_id ORDER BY clears DESC LIMIT 20`)
+      .map(r => ({ user_id: r.user_id, username: r.display_name || r.username, value: r.clears, clears: r.clears }));
+  } else {
+    return out(res, 400, { error: '排行榜类型无效，可选 power / level / dungeon' });
+  }
+  const entries = rows.map((x, i) => ({ ...x, rank: i + 1 }));
+  return out(res, 200, { type, entries });
+}
+
+/* ========== 转生（P5）：满级校验 / 等级重置 / 永久加成 / 称号记录 ========== */
+/* POST /api/rpg/reincarnate：100 级可转生，等级重置 1、exp 清空，属性恢复 1 级基础并叠加永久加成，转生次数 +1 */
+function handleReincarnate(req, res, u){
+  const p = getPlayer(u.id);
+  if(!p) return out(res, 404, { error: '尚未创建角色' });
+  if(p.level < MAX_LEVEL) return out(res, 400, { error: '未满 100 级无法转生' });
+  const n = (p.reincarnate_count || 0) + 1;
+  /* 加成随转生次数递增：第 n 次 +hp(40+10n) / +atk(6+2n) / +def(3+n) / +crit(1) */
+  const gainHp = 40 + n * 10, gainAtk = 6 + n * 2, gainDef = 3 + n, gainCrit = 1;
+  const newMaxHp = INIT_STATS.max_hp + (p.reincarnate_bonus_hp || 0) + gainHp;
+  const newAtk = INIT_STATS.attack + (p.reincarnate_bonus_atk || 0) + gainAtk;
+  const newDef = INIT_STATS.defense + (p.reincarnate_bonus_def || 0) + gainDef;
+  const newCrit = INIT_STATS.crit_rate + (p.reincarnate_bonus_crit || 0) + gainCrit;
+  stmt('UPDATE player SET level=1, exp=0, max_hp=?, cur_hp=?, attack=?, defense=?, crit_rate=?, reincarnate_count=?, reincarnate_title=?, reincarnate_bonus_hp=?, reincarnate_bonus_atk=?, reincarnate_bonus_def=?, reincarnate_bonus_crit=? WHERE user_id=?',
+    newMaxHp, newMaxHp, newAtk, newDef, newCrit, n, reincarnateTitle(n),
+    (p.reincarnate_bonus_hp || 0) + gainHp, (p.reincarnate_bonus_atk || 0) + gainAtk,
+    (p.reincarnate_bonus_def || 0) + gainDef, (p.reincarnate_bonus_crit || 0) + gainCrit, u.id);
+  return out(res, 200, {
+    ok: true, reincarnate_count: n, title: reincarnateTitle(n),
+    gained: { max_hp: gainHp, attack: gainAtk, defense: gainDef, crit_rate: gainCrit },
+    character: buildCharacter(u.id)
+  });
+}
+
 /* 掉落品质 roll：tableKey 掉落表 + bonusPct(精灵加成加到普通档) + boost(品质升档，最高稀有) */
 function rollDropQuality(tableKey, bonusPct, boost){
   bonusPct = bonusPct || 0; boost = boost || 0;
@@ -1217,7 +1416,9 @@ function grantBattleRewards(playerRow, monsterKey, tier, cfg){
   const race = RACE_CONFIG[playerRow.race] || {};
   const gold = randInt(monster.gold[0], monster.gold[1]);
   const goldGain = Math.max(1, Math.floor(gold * (1 + stats.gold_bonus / 100)));
-  const expGain = monster.exp;
+  /* P5 长线养成：等级越高经验效率越高（10 级起每 10 级 ×1 倍，满级 ×10），保证 1-100 曲线在合理场次内可达 */
+  const expScale = Math.max(1, Math.floor(playerRow.level / 10));
+  const expGain = Math.floor(monster.exp * expScale);
   const drops = [];
   let bonusPct = 0;
   if(tier === 'normal' || tier === 'elite') bonusPct += (race.drop_bonus || 0);
@@ -1240,11 +1441,11 @@ function grantBattleRewards(playerRow, monsterKey, tier, cfg){
   return { gold: goldGain, exp: expGain, drops };
 }
 
-/* 经验与升级：经验=当前等级×100，每级 hp+20/atk+3/def+1，封顶 6 级 */
+/* 经验与升级：经验需求按 expNeedFor 曲线递增（1-100 级，P5），每级 hp+20/atk+3/def+1 */
 function applyExpAndLevel(playerRow, expGain){
   let level = playerRow.level, exp = playerRow.exp + expGain, ups = 0;
-  while(level < 6 && exp >= level * 100){
-    exp -= level * 100; level++;
+  while(level < MAX_LEVEL && exp >= expNeedFor(level)){
+    exp -= expNeedFor(level); level++;
     playerRow.max_hp += LEVEL_UP_GROWTH.max_hp;
     playerRow.attack += LEVEL_UP_GROWTH.attack;
     playerRow.defense += LEVEL_UP_GROWTH.defense;
@@ -1998,6 +2199,12 @@ async function handleMarketCancel(req, res, u){
     if(path === '/api/rpg/market/create' && method === 'POST') return await handleMarketCreate(req, res, u);
     if(path === '/api/rpg/market/buy' && method === 'POST') return await handleMarketBuy(req, res, u);
     if(path === '/api/rpg/market/cancel' && method === 'POST') return await handleMarketCancel(req, res, u);
+
+    /* ========== 阶段4：长线养成（P5）成就 / 排行榜 / 转生 ========== */
+    if(path === '/api/rpg/achievements' && method === 'GET') return handleAchievements(req, res, u);
+    if(path === '/api/rpg/achievements/claim' && method === 'POST') return await handleAchievementClaim(req, res, u);
+    if(path === '/api/rpg/leaderboard' && method === 'GET') return handleLeaderboard(req, res, u);
+    if(path === '/api/rpg/reincarnate' && method === 'POST') return handleReincarnate(req, res, u);
 
     if(path === '/api/logout' && method === 'POST'){
       stmt('DELETE FROM sessions WHERE token=?', hash(cookie(req) || ''));

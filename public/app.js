@@ -148,6 +148,8 @@ function switchView(view) {
   else if (view === 'forge') viewForge();
   else if (view === 'shop') viewShop();
   else if (view === 'market') viewMarket();
+  else if (view === 'achievements') viewAchievements();
+  else if (view === 'leaderboard') viewLeaderboard();
 }
 
 /* ---------- 全局事件委托 ---------- */
@@ -183,6 +185,9 @@ document.addEventListener('click', async e => {
   else if (a === 'market-sell-submit') submitMarketSell();
   else if (a === 'market-buy') marketBuy(Number(el.dataset.id));
   else if (a === 'market-cancel') marketCancel(Number(el.dataset.id));
+  else if (a === 'ach-claim') claimAchievement(el.dataset.code);
+  else if (a === 'lb-tab') { currentLbTab = el.dataset.tab; renderLeaderboardList(); }
+  else if (a === 'reincarnate') doReincarnate();
   else if (a === 'go-backpack') { closeModal(); switchView('backpack'); }
   else if (a === 'open-profile') { switchView('profile'); }
   else if (a === 'close-modal') closeModal();
@@ -485,7 +490,7 @@ function renderSideAccount() {
 /* ================================================================
  * RPG —— 角色页
  * ================================================================ */
-function expNeed(level) { return level * 100; }
+function expNeed(level) { return level <= 10 ? level * 100 : level <= 20 ? Math.floor(1000 + (level - 10) * 150) : level <= 40 ? Math.floor(2500 + (level - 20) * 250) : level <= 70 ? Math.floor(7500 + (level - 40) * 500) : Math.floor(22500 + (level - 70) * 1250); }
 
 async function viewCharacter() {
   setNav('character');
@@ -552,7 +557,8 @@ function renderCharacter(c, st, dt) {
         <div class="char-ico">${race.ico}</div>
         <div class="char-meta">
           <div class="char-name">Lv.${c.level} ${esc(c.race)}</div>
-          <div class="exp-row"><div class="exp-bar"><i style="width:${c.level >= 6 ? 100 : Math.min(100, Math.round(c.exp / expNeed(c.level) * 100))}%"></i></div><span class="exp-text">${c.level >= 6 ? '经验 MAX' : `经验 ${c.exp} / ${expNeed(c.level)}${c.exp < expNeed(c.level) ? ` · 升级还需 ${expNeed(c.level) - c.exp}` : ''}`}</span></div>
+          ${c.reincarnate_count > 0 ? `<div class="rein-badge">${esc(c.reincarnate_title || ('轮回·' + c.reincarnate_count + '世'))} · 第 ${c.reincarnate_count} 世</div>` : ''}
+          <div class="exp-row"><div class="exp-bar"><i style="width:${c.level >= 100 ? 100 : Math.min(100, Math.round(c.exp / expNeed(c.level) * 100))}%"></i></div><span class="exp-text">${c.level >= 100 ? '经验 MAX（可转生）' : `经验 ${c.exp} / ${expNeed(c.level)}${c.exp < expNeed(c.level) ? ` · 升级还需 ${expNeed(c.level) - c.exp}` : ''}`}</span></div>
         </div>
         <div class="gold-big">🪙 ${c.gold}</div>
       </div>
@@ -568,6 +574,7 @@ function renderCharacter(c, st, dt) {
         <div class="attr-cell"><span>暴击率</span><b class="v-crit">${c.crit_rate}%</b></div>
         <div class="attr-cell"><span>暴击伤害</span><b class="v-critd">${c.crit_dmg}%</b></div>
         <div class="attr-cell"><span>金币加成</span><b class="v-gold">${c.gold_bonus}%</b></div>
+        <div class="attr-cell"><span>转生</span><b>${c.reincarnate_count || 0} 次</b></div>
         <div class="attr-cell"><span>今日副本</span><b>${remaining} 次</b></div>
         <div class="attr-cell"><span>一章 Boss</span><b>${c.boss_kills_ch1} 次</b></div>
         <div class="attr-cell"><span>二章 Boss</span><b>${c.boss_kills_ch2} 次</b></div>
@@ -593,6 +600,13 @@ function renderCharacter(c, st, dt) {
         }).join('')}
       </div>
     </section>
+
+    ${c.level >= 100 ? `
+    <section class="panel glass">
+      <h3 class="panel-title">转生</h3>
+      <p class="muted">已达成 100 级满级，可转生重置等级为 1，并获得永久属性加成与转生称号（每次转生加成递增）。</p>
+      <button class="primary full" data-action="reincarnate">转生 · 等级重置为 1</button>
+    </section>` : ''}
 
     ${renderDailyPanel(dt && dt.tasks)}`;
 }
@@ -1623,6 +1637,108 @@ async function marketCancel(id) {
     refreshBackpack();
     renderMarketAll();
   } catch (e) { toast(e.message, true); } finally { marketBusy = false; }
+}
+
+/* ================================================================
+ * RPG —— 成就页（P5）
+ * ================================================================ */
+async function viewAchievements() {
+  setNav('achievements');
+  $('#view').innerHTML = '<p class="empty-tip">加载中…</p>';
+  try {
+    const d = await api('/api/rpg/achievements');
+    const ach = d.achievements || [];
+    const unlocked = ach.filter(x => x.unlocked).length;
+    const claimable = ach.filter(x => x.claimable).length;
+    $('#view').innerHTML = `
+      <div class="page-title"><h2>成就</h2><p class="muted">已解锁 ${unlocked} / ${ach.length} · 可领取 ${claimable}</p></div>
+      <div class="ach-grid">
+        ${ach.map(a => renderAchCard(a)).join('')}
+      </div>`;
+  } catch (e) {
+    if (/尚未创建角色/.test(e.message)) { $('#view').innerHTML = `<p class="empty-tip">尚未创建角色，请先前往「角色」页创建。</p>`; }
+    else { toast(e.message, true); $('#view').innerHTML = '<p class="empty-tip">加载失败</p>'; }
+  }
+}
+function renderAchCard(a) {
+  const pct = Math.min(100, Math.round(a.progress / a.amount * 100));
+  const btn = a.claimable
+    ? `<button class="primary sm" data-action="ach-claim" data-code="${a.code}">领取奖励</button>`
+    : a.claimed ? `<span class="muted">已领取</span>` : `<span class="muted">未解锁</span>`;
+  return `
+    <div class="panel glass ach-card ${a.claimed ? 'ach-claimed' : a.unlocked ? 'ach-unlocked' : ''}">
+      <div class="ach-head">
+        <div class="ach-name">${esc(a.name)} ${qualityBadge(a.type === 'level' ? 'legendary' : a.type === 'reincarnate' ? 'rare' : 'fine')}</div>
+        <div class="ach-desc muted">${esc(a.desc)}</div>
+      </div>
+      <div class="ach-progress"><div class="exp-bar"><i style="width:${pct}%"></i></div><span class="exp-text">${a.progress} / ${a.amount}</span></div>
+      <div class="ach-foot">
+        <span class="ach-reward">🪙 ${a.reward.gold}${(a.reward.items || []).length ? ' · 道具奖励' : ''}</span>
+        ${btn}
+      </div>
+    </div>`;
+}
+async function claimAchievement(code) {
+  try {
+    const d = await api('/api/rpg/achievements/claim', { method: 'POST', body: { code } });
+    toast(`成就「${d.rewards && d.rewards.name ? d.rewards.name : '已领取'}」奖励到账 🪙 ${d.rewards ? d.rewards.gold : 0}`);
+    rpg.gold = d.gold;
+    updateGold();
+    viewAchievements();
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ================================================================
+ * RPG —— 排行榜页（P5）
+ * ================================================================ */
+let currentLbTab = 'power';
+async function viewLeaderboard() {
+  setNav('leaderboard');
+  $('#view').innerHTML = `
+    <div class="page-title"><h2>排行榜</h2><p class="muted">强者之名，尽在此榜</p></div>
+    <div class="tabs" id="lbTabs">
+      <button data-action="lb-tab" data-tab="power" class="active">战力榜</button>
+      <button data-action="lb-tab" data-tab="level">等级榜</button>
+      <button data-action="lb-tab" data-tab="dungeon">副本榜</button>
+    </div>
+    <div id="lbList"><p class="empty-tip">加载中…</p></div>`;
+  currentLbTab = 'power';
+  renderLeaderboardList();
+}
+async function renderLeaderboardList() {
+  $$('#lbTabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === currentLbTab));
+  const wrap = $('#lbList');
+  if (!wrap) return;
+  wrap.innerHTML = '<p class="empty-tip">加载中…</p>';
+  try {
+    const d = await api('/api/rpg/leaderboard?type=' + encodeURIComponent(currentLbTab));
+    const entries = d.entries || [];
+    wrap.innerHTML = entries.length ? `
+      <div class="lb-list">
+        ${entries.map((e, i) => {
+          const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${e.rank}`;
+          const val = currentLbTab === 'power' ? `${e.value} 战力` : currentLbTab === 'level' ? `Lv.${e.value} · 经验 ${e.exp}` : `通关 ${e.value} 次`;
+          return `<div class="lb-row">
+            <span class="lb-rank">${medal}</span>
+            <span class="lb-name">${esc(e.username)}${e.user_id === ME.id ? ' <span class="q-badge q-rare">我</span>' : ''}</span>
+            <span class="lb-val">${val}</span>
+          </div>`;
+        }).join('')}
+      </div>` : '<p class="empty-tip">暂无排行数据</p>';
+  } catch (e) { toast(e.message, true); wrap.innerHTML = '<p class="empty-tip">加载失败</p>'; }
+}
+
+/* ================================================================
+ * RPG —— 转生（P5）
+ * ================================================================ */
+async function doReincarnate() {
+  if (!confirm('转生后等级将重置为 1，并获得永久属性加成与转生称号，确定转生吗？')) return;
+  try {
+    const d = await api('/api/rpg/reincarnate', { method: 'POST', body: {} });
+    toast(`转生成功！获得「${d.title}」，永久加成 HP+${d.gained.max_hp} / 攻击+${d.gained.attack} / 防御+${d.gained.defense} / 暴击+${d.gained.crit_rate}%`);
+    rpg.character = d.character;
+    viewCharacter();
+  } catch (e) { toast(e.message, true); }
 }
 
 /* ================================================================

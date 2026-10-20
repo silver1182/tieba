@@ -612,3 +612,22 @@ button.primary.small{padding:5px 12px;font-size:12px}
 .sell-cand .muted{margin-left:auto;font-size:12px}
 .sell-form{display:flex;flex-direction:column;gap:10px}
 .sell-form .field{margin-bottom:0}
+
+/* ===== P5 长线养成：成就 / 排行榜 / 转生 ===== */
+.rein-badge{display:inline-block;margin:2px 0 6px;padding:2px 10px;font-size:12px;color:#fbbf24;background:#f59e0b22;border:1px solid #f59e0b55;border-radius:12px}
+.ach-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.ach-card{opacity:.72;transition:opacity .2s}
+.ach-card.ach-unlocked{opacity:1}
+.ach-card.ach-claimed{opacity:.5}
+.ach-head{margin-bottom:8px}
+.ach-name{font-weight:700}
+.ach-desc{font-size:12px;margin-top:2px}
+.ach-progress{display:flex;align-items:center;gap:8px;margin:8px 0}
+.ach-progress .exp-bar{flex:1}
+.ach-foot{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.ach-reward{font-size:12px;color:#fbbf24}
+.lb-list{display:flex;flex-direction:column;gap:6px}
+.lb-row{display:flex;align-items:center;gap:10px;padding:10px 14px;background:#ffffff0d;border:1px solid #ffffff1a;border-radius:10px}
+.lb-rank{width:34px;font-weight:700;text-align:center}
+.lb-name{flex:1;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lb-val{font-size:13px;color:#94a3b8;white-space:nowrap}
