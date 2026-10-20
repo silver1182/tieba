@@ -135,6 +135,9 @@ let chatOpen = window.matchMedia('(min-width: 1025px)').matches;
 let currentMarketTab = 'all'; // 交易行：在售 / 我的
 let marketBusy = false; // 交易行请求互斥
 let marketPage = 1; // 交易行当前页
+let backpackBusy = false; // 背包出售/菜单请求互斥（防连点）
+let backpackSell = null; // { id, qty, name, gain } 待确认出售的物品
+let backpackSelId = null; // 背包菜单选中的物品 id
 
 /* ---------- 导航 ---------- */
 function setNav(view) {
@@ -162,6 +165,11 @@ document.addEventListener('click', async e => {
   else if (a === 'equip') equipItem(el.dataset.id);
   else if (a === 'unequip') unequipItem(el.dataset.id);
   else if (a === 'bp-tab') { currentBackpackTab = el.dataset.tab; renderBackpackList(); }
+  else if (a === 'bp-menu') openBackpackMenu(Number(el.dataset.id));
+  else if (a === 'bp-menu-equip') { closeModal(); equipItem(Number(el.dataset.id)); }
+  else if (a === 'bp-sell') openSellConfirm(Number(el.dataset.id));
+  else if (a === 'bp-sell-submit') sellItem();
+  else if (a === 'bp-market') openMarketSell(Number(el.dataset.id));
   else if (a === 'forge-tab') { currentForgeTab = el.dataset.tab; renderForgeList(); }
   else if (a === 'forge-qty') updateForgeQty(el.dataset.index);
   else if (a === 'forge') forgeItem(el.dataset.kind, el.dataset.key, Number(el.dataset.index));
@@ -650,26 +658,33 @@ function renderBackpackList() {
     material: b.material || [],
     quest: b.quest || []
   }[currentBackpackTab] || [];
+  const EMPTY_TIPS = {
+    equipment: '背包里还没有装备，去副本挑战 Boss 或开装备箱获取吧。',
+    material: '还没有材料，副本战斗与铁匠铺会产出制作材料。',
+    consumable: '没有消耗品，可在商店购买药水。',
+    quest: '没有任务物品。'
+  };
   if (!group.length) {
-    wrap.innerHTML = `<p class="empty-tip">空空如也，去副本或商店里获得一些物品吧。</p>`;
+    wrap.innerHTML = `<p class="empty-tip">${EMPTY_TIPS[currentBackpackTab] || '空空如也，去副本或商店里获得一些物品吧。'}</p>`;
     return;
   }
   if (currentBackpackTab === 'equipment') {
     wrap.innerHTML = `<div class="item-grid">${group.map(it => `
-      <div class="item-card ${QUALITY_CLASS[it.quality] || 'q-normal'}">
+      <div class="item-card ${QUALITY_CLASS[it.quality] || 'q-normal'}" data-action="bp-menu" data-id="${it.id}">
         <div class="item-ico">${TYPE_ICO[it.type] || '📦'}</div>
         <div class="item-name">${esc(it.name)} ${qualityBadge(it.quality)}</div>
         <div class="item-stats">${statsText(it.stats)}</div>
         ${it.desc ? `<div class="item-desc">${esc(it.desc)}</div>` : ''}
-        <button class="primary sm" data-action="equip" data-id="${it.id}">装备</button>
+        <button class="primary sm">⚙️ 操作</button>
       </div>`).join('')}</div>`;
   } else {
     wrap.innerHTML = `<div class="stack-list">${group.map(it => `
-      <div class="stack-row glass">
+      <div class="stack-row glass" data-action="bp-menu" data-id="${it.id}">
         <span class="stack-ico">${TYPE_ICO[it.type] || '📦'}</span>
         <span class="stack-name">${esc(it.name)}${it.quality && it.quality !== 'normal' ? ' ' + qualityBadge(it.quality) : ''}</span>
         ${it.stats && Object.keys(it.stats).length ? `<span class="stack-stats">${statsText(it.stats)}</span>` : ''}
         <span class="stack-qty">×${it.quantity}</span>
+        <button class="primary sm">⚙️ 操作</button>
       </div>`).join('')}</div>`;
   }
 }
@@ -691,6 +706,107 @@ async function unequipItem(id) {
     const view = document.querySelector('[data-view].active')?.dataset.view;
     if (view === 'backpack') await viewBackpack(); else viewCharacter();
   } catch (e) { toast(e.message, true); }
+}
+
+/* ================================================================
+ * 背包操作菜单 / 出售给 NPC（体验打磨）
+ * ================================================================ */
+const BP_SELL_QUALITY_PRICE = { normal: 10, fine: 25, superb: 60, rare: 150, legendary: 400 };
+const BP_SELL_MATERIAL_PRICE = { '枯木': 8, '粗糙皮革': 15, '黑铁矿': 25, '黑狼牙': 30, '净化碎片': 35 };
+function findBackpackItem(id) {
+  const b = rpg.backpack || {};
+  const arr = [...(b.equipment || []), ...(b.material || [])];
+  return arr.find(it => Number(it.id) === Number(id)) || null;
+}
+function sellPricePreview(it) {
+  if (!it) return 0;
+  if (['weapon', 'armor', 'accessory'].includes(it.type)) return BP_SELL_QUALITY_PRICE[it.quality] || 0;
+  if (it.type === 'material') return BP_SELL_MATERIAL_PRICE[it.name] || 0;
+  return 0;
+}
+function openBackpackMenu(id) {
+  if (backpackBusy) return;
+  const it = findBackpackItem(id);
+  if (!it) { toast('物品不存在或已变化', true); return; }
+  backpackSelId = id;
+  const unit = sellPricePreview(it);
+  const isEquip = ['weapon', 'armor', 'accessory'].includes(it.type);
+  const actions = [];
+  if (isEquip) actions.push(`<button class="primary block" data-action="bp-menu-equip" data-id="${it.id}">👔 穿戴</button>`);
+  actions.push(`<button class="primary block" data-action="bp-sell" data-id="${it.id}">💰 出售给 NPC${unit ? `<span class="muted">（单价 🪙 ${unit}）</span>` : ''}</button>`);
+  actions.push(`<button class="primary block" data-action="bp-market" data-id="${it.id}">🏷️ 上架交易行</button>`);
+  openModal(`
+    <h3 class="modal-title">${esc(it.name)} ${qualityBadge(it.quality)}</h3>
+    <div class="modal-body">
+      <div class="item-info-line">${TYPE_ICO[it.type] || '📦'} ${it.quantity ? `数量 ×${it.quantity}` : ''}</div>
+      ${isEquip && it.stats && Object.keys(it.stats).length ? `<div class="item-stats">${statsText(it.stats)}</div>` : ''}
+      ${it.desc ? `<div class="item-desc">${esc(it.desc)}</div>` : ''}
+      <div class="bp-menu-actions">${actions.join('')}</div>
+      <p class="muted">出售与上架仅限背包中的物品，穿戴或挂单中的物品不可操作。</p>
+    </div>
+    <div class="modal-actions"><button class="ghost" data-action="close-modal">关闭</button></div>
+  `);
+}
+function openSellConfirm(id) {
+  if (backpackBusy) return;
+  const it = findBackpackItem(id);
+  if (!it) { toast('物品不存在或已变化', true); return; }
+  const unit = sellPricePreview(it);
+  if (!unit) { toast('该物品无法估价出售', true); return; }
+  backpackSelId = id;
+  if (it.type === 'material') {
+    const max = Math.max(1, it.quantity || 1);
+    backpackSell = { id, qty: 1, name: it.name, gain: unit, unit };
+    openModal(`
+      <h3 class="modal-title">出售 ${esc(it.name)}</h3>
+      <div class="modal-body">
+        <p class="muted">出售给 NPC：单价 🪙 ${unit} / 个，当前持有 ×${max}</p>
+        <label class="field"><span>出售数量</span>
+          <input type="number" id="bpSellQty" value="1" min="1" max="${max}">
+        </label>
+        <p class="sell-preview">预计获得 <b class="gold-strong">🪙 <span id="bpSellGain">${unit}</span></b> 金币</p>
+      </div>
+      <div class="modal-actions">
+        <button class="danger" data-action="bp-sell-submit">确认出售</button>
+        <button class="ghost" data-action="close-modal">取消</button>
+      </div>`);
+    const q = $('#bpSellQty');
+    if (q) q.addEventListener('input', () => {
+      const v = Math.max(1, Math.min(max, Number(q.value) || 1));
+      q.value = v;
+      backpackSell.qty = v;
+      const g = $('#bpSellGain');
+      if (g) g.textContent = unit * v;
+    });
+  } else {
+    backpackSell = { id, qty: 1, name: it.name, gain: unit, unit };
+    openModal(`
+      <h3 class="modal-title">出售 ${esc(it.name)}</h3>
+      <div class="modal-body">
+        <p class="muted">出售给 NPC，回收价 <b class="gold-strong">🪙 ${unit}</b> 金币</p>
+        ${it.stats && Object.keys(it.stats).length ? `<div class="item-stats">${statsText(it.stats)}</div>` : ''}
+        <p class="sell-warn">⚠️ 出售后无法找回，确定出售吗？</p>
+      </div>
+      <div class="modal-actions">
+        <button class="danger" data-action="bp-sell-submit">确认出售</button>
+        <button class="ghost" data-action="close-modal">取消</button>
+      </div>`);
+  }
+}
+async function sellItem() {
+  if (backpackBusy || !backpackSell) return;
+  backpackBusy = true;
+  try {
+    const d = await api('/api/rpg/sell', { method: 'POST', body: { item_id: backpackSell.id, quantity: backpackSell.qty } });
+    closeModal();
+    backpackSell = null;
+    rpg.gold = d.gold; updateGold();
+    toast(`已出售 ${d.item_name}${d.quantity > 1 ? ' ×' + d.quantity : ''}，获得 🪙 ${d.gain} 金币`);
+    const view = document.querySelector('[data-view].active')?.dataset.view;
+    if (view === 'backpack') await viewBackpack();
+    else if (view === 'market') { await refreshBackpack(); renderMarketAll(); }
+    else { const b = await api('/api/rpg/backpack'); rpg.backpack = b.backpack; }
+  } catch (e) { toast(e.message, true); } finally { backpackBusy = false; }
 }
 
 /* ================================================================
@@ -794,20 +910,27 @@ const GOAL_ICO = { clear: '🏁', kill: '⚔️', encounter: '✨', collect: '�
 const DAILY_ICO = { clear: '🏁', kill: '⚔️', forge: '🔨', shop: '🛒' };
 function renderDailyPanel(tasks) {
   if (!tasks || !tasks.length) return '';
+  const doneCnt = tasks.filter(t => t.done).length;
+  const claimableCnt = tasks.filter(t => t.claimable && !t.claimed).length;
   return `<section class="panel glass">
     <h3 class="panel-title">每日任务 · ${esc(tasks[0].date || '')}</h3>
+    <div class="daily-summary">
+      <span class="daily-sum-item">完成 <b>${doneCnt}/${tasks.length}</b></span>
+      ${claimableCnt > 0 ? `<span class="daily-sum-claim">🎁 ${claimableCnt} 个任务可领取奖励</span>` : '<span class="muted">今日进度已全部领取</span>'}
+    </div>
     <div class="goal-list">
       ${tasks.map(t => {
         const pct = Math.min(100, Math.round(t.progress / t.amount * 100));
         const btn = t.claimed
           ? '<span class="goal-claimed">✓ 已领取</span>'
           : t.claimable
-            ? `<button class="primary small" data-action="daily-claim" data-slot="${t.slot}">领取奖励</button>`
+            ? `<button class="primary small claim-btn" data-action="daily-claim" data-slot="${t.slot}">🎁 领取奖励</button>`
             : '<span class="goal-locked">进行中</span>';
         return `<div class="goal-item ${t.done && !t.claimed ? 'ready' : ''}">
           <div class="goal-head">
             <span class="goal-ico">${DAILY_ICO[t.type] || '🎯'}</span>
             <span class="goal-title">${esc(t.type_cn)}：${esc(t.target)}</span>
+            ${t.done && !t.claimed ? '<span class="goal-claimable-tag">可领取</span>' : ''}
             <span class="goal-progress">${t.progress}/${t.amount}</span>
           </div>
           <div class="goal-bar"><div class="goal-bar-fill" style="width:${pct}%"></div></div>
@@ -821,6 +944,8 @@ function renderDailyPanel(tasks) {
   </section>`;
 }
 async function claimDailyTask(slot) {
+  if (backpackBusy) return; // 防连点
+  backpackBusy = true;
   try {
     const d = await api('/api/rpg/daily-tasks/claim', { method: 'POST', body: { slot } });
     rpg.gold = d.gold;
@@ -833,7 +958,7 @@ async function claimDailyTask(slot) {
         : `${r.name}×${r.quantity}`);
     toast(`每日任务领取成功：${parts.join('、')}`);
     viewCharacter();
-  } catch (e) { toast(e.message, true); }
+  } catch (e) { toast(e.message, true); } finally { backpackBusy = false; }
 }
 function goalRewardText(r) {
   const parts = [];
@@ -1046,7 +1171,7 @@ function renderEncounterResult(d) {
 
 function renderBattleResult(d, failed) {
   const lines = (d.log || []).map(x => `<li>${esc(x)}</li>`).join('');
-  const drops = (d.drops || []).map(x => `<span class="r-item">📦 ${esc(x.name)}（${QUALITY_CN[x.quality] || x.quality}）</span>`).join('');
+  const drops = (d.drops || []).map(x => `<span class="r-item drop-item ${QUALITY_CLASS[x.quality] || 'q-normal'}">📦 ${esc(x.name)}（${QUALITY_CN[x.quality] || x.quality}）</span>`).join('');
   const trace = d.hpTrace && d.hpTrace.length ? d.hpTrace : null;
   const pName = d.playerName || (rpg.char ? `${rpg.char.race}·冒险者` : '冒险者');
   const pEmoji = rpg.char ? (RACE_INFO[rpg.char.race] ? RACE_INFO[rpg.char.race].ico : '🧑') : '🧑';
@@ -1130,7 +1255,7 @@ async function dungeonSettle() {
         <div class="battle-head">事件 ${b.event} · ${esc(b.monster)} · ${b.win ? '✅ 胜' : '❌ 败'}</div>
         <ul class="battle-log">${(b.log || []).map(x => `<li>${esc(x)}</li>`).join('')}</ul>
       </div>`).join('');
-    const drops = (d.drops || []).map(x => `<span class="r-item">📦 ${esc(x.name)} ×${x.quantity || 1}（${QUALITY_CN[x.quality] || x.quality}）</span>`).join('');
+    const drops = (d.drops || []).map(x => `<span class="r-item drop-item ${QUALITY_CLASS[x.quality] || 'q-normal'}">📦 ${esc(x.name)} ×${x.quantity || 1}（${QUALITY_CN[x.quality] || x.quality}）</span>`).join('');
     $('#view').innerHTML = `
       <div class="page-title"><h2>副本结算</h2><p class="muted">第 ${d.chapter} 章</p></div>
       <section class="panel glass">
@@ -1550,13 +1675,17 @@ async function renderMarketMine() {
 }
 let marketSellItems = []; // 上架候选：背包可交易物品
 let marketSellSel = -1; // 上架弹窗选中的候选下标
-async function openMarketSell() {
+async function openMarketSell(preselectId) {
   try {
     const b = await api('/api/rpg/backpack');
     marketSellItems = ((b.backpack && b.backpack.equipment) || []).map(it => ({ ...it, sellQty: 1 }))
       .concat(((b.backpack && b.backpack.material) || []).map(it => ({ ...it, sellQty: 1 })));
     marketSellSel = -1;
     if (!marketSellItems.length) { toast('背包中没有可交易的装备或材料', true); return; }
+    if (preselectId) {
+      const idx = marketSellItems.findIndex(it => Number(it.id) === Number(preselectId));
+      if (idx >= 0) marketSellSel = idx;
+    }
     renderMarketSellModal();
   } catch (e) { toast(e.message, true); }
 }

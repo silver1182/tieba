@@ -573,6 +573,8 @@ const SHOP_ITEMS = {
 /* 交易行（P4）：48 小时保存、5% 手续费 */
 const MARKET_FEE = 0.05;
 const MARKET_DURATION = 48 * 3600 * 1000;
+/* 背包直接出售 NPC（体验打磨）：装备按品质回收，材料按商店基础单价 */
+const SELL_QUALITY_PRICE = { normal: 10, fine: 25, superb: 60, rare: 150, legendary: 400 };
 /* 地底商人随机商品池（每次出现随机 3 件，只能买 1 件） */
 const MERCHANT_GOODS = [
   { name:'小型药水', type:'consumable', quality:'normal', stats:{ heal_pct:30 }, price:20 },
@@ -2166,6 +2168,38 @@ async function handleMarketCancel(req, res, u){
   return out(res, 200, { ok: true, order_id: order.id });
 }
 
+/* ========== 体验打磨：背包直接出售给 NPC（第 12 节） ========== */
+async function handleSell(req, res, u){
+  const b = await body(req);
+  const p = getPlayer(u.id);
+  if(!p) return out(res, 404, { error: '尚未创建角色' });
+  const itemId = Number(b.item_id) || 0;
+  const item = get('SELECT * FROM items WHERE id=? AND owner_id=?', itemId, u.id);
+  if(!item){
+    /* 挂单中的物品已从背包扣减（consumeItem），物品行不存在时检查是否正处于挂单 */
+    const listed = get('SELECT id FROM market_listings WHERE item_id=? AND seller_id=? AND status=?', itemId, u.id, 'active');
+    if(listed) return out(res, 400, { error: '该物品正在交易行挂单中，请先下架再出售' });
+    return out(res, 404, { error: '物品不存在' });
+  }
+  if(item.location !== 'backpack') return out(res, 400, { error: item.location.startsWith('equipped_') ? '已穿戴物品不可出售，请先卸下' : '该物品不在背包中' });
+  let unit = 0;
+  if(['weapon','armor','accessory'].includes(item.type)){
+    unit = SELL_QUALITY_PRICE[item.quality];
+    if(!unit) return out(res, 400, { error: '该装备品质无法估价出售' });
+  } else if(item.type === 'material'){
+    unit = (SHOP_ITEMS[item.name] || {}).price;
+    if(!unit) return out(res, 400, { error: '该材料无法估价出售' });
+  } else {
+    return out(res, 400, { error: '该物品无法出售' });
+  }
+  let quantity = 1;
+  if(item.type === 'material') quantity = Math.max(1, Math.min(item.quantity, Number(b.quantity) || 1));
+  const gain = unit * quantity;
+  consumeItem(u.id, item.id, quantity);
+  stmt('UPDATE player SET gold=gold+? WHERE user_id=?', gain, u.id);
+  return out(res, 200, { ok: true, gold: p.gold + gain, gain, item_name: item.name, item_type: item.type, quantity });
+}
+
     /* ========== 阶段2：副本与战斗接口（第 4 节） ========== */
     if(path === '/api/rpg/dungeon/start' && method === 'POST') return await handleDungeonStart(req, res, u);
     if(path === '/api/rpg/dungeon/event' && method === 'POST') return await handleDungeonEvent(req, res, u);
@@ -2198,6 +2232,7 @@ async function handleMarketCancel(req, res, u){
     if(path === '/api/rpg/market/mine' && method === 'GET') return await handleMarketMine(req, res, u);
     if(path === '/api/rpg/market/create' && method === 'POST') return await handleMarketCreate(req, res, u);
     if(path === '/api/rpg/market/buy' && method === 'POST') return await handleMarketBuy(req, res, u);
+    if(path === '/api/rpg/sell' && method === 'POST') return await handleSell(req, res, u);
     if(path === '/api/rpg/market/cancel' && method === 'POST') return await handleMarketCancel(req, res, u);
 
     /* ========== 阶段4：长线养成（P5）成就 / 排行榜 / 转生 ========== */
