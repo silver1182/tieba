@@ -64,12 +64,15 @@ function avatarImg(user) {
 
 function openModal(html) {
   const root = $('#modalRoot');
+  if (!root) return;
+  closeModal();
   root.innerHTML = `<div class="modal-mask" data-action="close-modal"><div class="modal glass">${html}</div></div>`;
   root.classList.remove('hidden');
   $('#modalRoot .modal input:first-of-type')?.focus();
 }
 function closeModal() {
   const root = $('#modalRoot');
+  if (!root) return;
   root.classList.add('hidden');
   root.innerHTML = '';
 }
@@ -821,7 +824,13 @@ function renderBackpackList() {
         <div class="item-stats">${statsText(it.stats)}</div>
         ${equipMarkHtml(it)}
         ${it.desc ? `<div class="item-desc">${esc(it.desc)}</div>` : ''}
-        <button class="primary sm">⚙️ 操作</button>
+        <div class="item-actions">
+          ${(() => { const cur = findEquippedByType(it.type); return cur && cur.id === it.id
+            ? `<button class="ghost sm" data-action="unequip" data-id="${it.id}">⬇️ 卸下</button>`
+            : `<button class="primary sm" data-action="bp-menu-equip" data-id="${it.id}">👔 穿戴</button>`; })()}
+          ${it.sellable ? `<button class="ghost sm" data-action="bp-sell" data-id="${it.id}">💰 出售</button>` : ''}
+          ${it.marketable ? `<button class="ghost sm" data-action="bp-market" data-id="${it.id}">🏷️ 上架</button>` : ''}
+        </div>
       </div>`).join('')}</div>`;
   } else {
     wrap.innerHTML = sortRow + `<div class="stack-list">${list.map(it => `
@@ -830,7 +839,10 @@ function renderBackpackList() {
         <span class="stack-name">${esc(it.name)}${it.quality && it.quality !== 'normal' ? ' ' + qualityBadge(it.quality) : ''}${highlightSell && it.sellable ? `<span class="sell-hint-tag">💰 可出售</span>` : ''}</span>
         ${it.stats && Object.keys(it.stats).length ? `<span class="stack-stats">${statsText(it.stats)}</span>` : ''}
         <span class="stack-qty">×${it.quantity}</span>
-        <button class="primary sm">⚙️ 操作</button>
+        ${(it.sellable || it.marketable) ? `<div class="item-actions">
+          ${it.sellable ? `<button class="ghost sm" data-action="bp-sell" data-id="${it.id}">💰 出售</button>` : ''}
+          ${it.marketable ? `<button class="ghost sm" data-action="bp-market" data-id="${it.id}">🏷️ 上架</button>` : ''}
+        </div>` : ''}
       </div>`).join('')}</div>`;
   }
 }
@@ -1083,7 +1095,7 @@ function renderDungeonPage(st) {
         <div class="chapter-card ${st.chapter === 2 ? 'active' : ''} ${ch2Locked ? 'locked' : ''}">
           <div class="chapter-ico">⛏️</div>
           <div class="chapter-name">第二章 · 沉没矿坑</div>
-          <p class="muted">${ch2Locked ? '未解锁：需要 等级≥3 且击败第一章 Boss ≥1 次' : '已解锁'}</p>
+          <p class="muted">${ch2Locked ? '未解锁：需要 等级≥3 且击败第一章 Boss ≥1 次' : '等级 3 起 · 5 种怪物 · 3 种奇遇'}</p>
           <p class="chapter-req">${recText(2) || '<span class="muted">通关第一章后解锁</span>'}</p>
           <button class="chapter-info-btn" data-action="dungeon-info" data-chapter="2">📋 详情 · 掉落与剧情</button>
         </div>
@@ -2053,8 +2065,17 @@ async function marketBuy(id) {
     rpg.gold = d.gold;
     updateGold();
     refreshBackpack();
-    toast(`购买成功：${d.name} ×${d.quantity}，花费 🪙 ${d.cost}（含手续费 🪙 ${d.fee}）`);
-    renderMarketAll();
+    await renderMarketAll();
+    openModal(`
+      <h3 class="modal-title">购买成功</h3>
+      <div class="modal-body">
+        <p>获得 <b>${esc(d.name)}</b> ${d.quality ? qualityBadge(d.quality) : ''}${d.quantity ? ' ×' + d.quantity : ''}</p>
+        <p class="muted">花费 🪙 ${d.cost}（含手续费 🪙 ${d.fee}）</p>
+      </div>
+      <div class="modal-actions">
+        <button class="ghost" data-action="close-modal">继续购物</button>
+        <button class="primary" data-action="go-backpack">去背包</button>
+      </div>`);
   } catch (e) { toast(e.message, true); } finally { marketBusy = false; }
 }
 async function marketCancel(id) {
