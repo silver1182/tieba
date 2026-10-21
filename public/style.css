@@ -660,3 +660,19 @@ button.primary.small{padding:5px 12px;font-size:12px}
 .goal-claimable-tag{font-size:11px;color:#ffd700;background:#ffd7001f;border:1px solid #ffd70066;padding:1px 8px;border-radius:10px;font-weight:700}
 .claim-btn{animation:claimPulse 1.8s ease-in-out infinite}
 @keyframes claimPulse{0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,.45)}50%{box-shadow:0 0 0 6px rgba(245,158,11,0)}}
+
+/* ===== UX polish: guide bar / sell compare / sell-all / market summary ===== */
+.guide-bar{max-width:760px;margin:12px auto 0;padding:0 16px}
+.guide-bar.hidden{display:none}
+.guide-inner{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 14px;border-radius:14px;background:linear-gradient(135deg,rgba(255,215,0,.14),rgba(255,140,0,.10));border:1px solid rgba(255,215,0,.35);font-size:13px}
+.guide-tag{font-weight:800;color:#ffd700}
+.guide-step{color:var(--muted)}
+.guide-step.done{color:#4ade80}
+.guide-step.cur{color:#ffd700;font-weight:800}
+.guide-arrow{color:rgba(255,255,255,.25)}
+.guide-go{margin-left:4px}
+.equip-cmp{display:flex;flex-direction:column;gap:6px;margin-top:10px;padding:10px 12px;border-radius:10px;background:rgba(255,255,255,.05);font-size:13px}
+.cmp-better{color:#4ade80;font-weight:600}
+.cmp-worse{color:#f87171;font-weight:600}
+.sell-qty-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px}
+.market-summary{display:flex;flex-direction:column;gap:6px;margin-top:12px;padding:10px 12px;border-radius:10px;background:rgba(255,255,255,.05);font-size:13px}

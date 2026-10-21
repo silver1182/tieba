@@ -575,6 +575,14 @@ const MARKET_FEE = 0.05;
 const MARKET_DURATION = 48 * 3600 * 1000;
 /* 背包直接出售 NPC（体验打磨）：装备按品质回收，材料按商店基础单价 */
 const SELL_QUALITY_PRICE = { normal: 10, fine: 25, superb: 60, rare: 150, legendary: 400 };
+/* 统一估价：背包接口为每件物品返回 sell_unit_price / sellable / marketable（体验打磨第 1、2 条） */
+function sellPriceFor(it){
+  if(['weapon','armor','accessory'].includes(it.type)) return SELL_QUALITY_PRICE[it.quality] || 0;
+  if(it.type === 'material') return (SHOP_ITEMS[it.name] || {}).price || 0;
+  return 0;
+}
+function itemSellable(it){ return sellPriceFor(it) > 0; }
+function itemMarketable(it){ return ['weapon','armor','accessory','material'].includes(it.type); }
 /* 地底商人随机商品池（每次出现随机 3 件，只能买 1 件） */
 const MERCHANT_GOODS = [
   { name:'小型药水', type:'consumable', quality:'normal', stats:{ heal_pct:30 }, price:20 },
@@ -649,14 +657,14 @@ function buildBackpack(userId){
   const stack = new Map();
   for(const it of items){
     if(['weapon','armor','accessory'].includes(it.type)){
-      if(it.location === 'backpack') groups.equipment.push({ ...it, desc: EQUIP_DESC[it.name] || '' });
+      if(it.location === 'backpack') groups.equipment.push({ ...it, desc: EQUIP_DESC[it.name] || '', sell_unit_price: sellPriceFor(it), sellable: itemSellable(it), marketable: itemMarketable(it) });
       continue;
     }
     const g = it.type === 'consumable' ? groups.consumable : it.type === 'material' ? groups.material : groups.quest;
     const key = it.type + ':' + it.name + ':' + JSON.stringify(it.stats);
     const found = stack.get(key);
     if(found){ found.quantity += it.quantity; continue; }
-    const row = { id:it.id, name:it.name, type:it.type, quality:it.quality, stats:it.stats, quantity:it.quantity, location:it.location };
+    const row = { id:it.id, name:it.name, type:it.type, quality:it.quality, stats:it.stats, quantity:it.quantity, location:it.location, sell_unit_price: sellPriceFor(it), sellable: itemSellable(it), marketable: itemMarketable(it) };
     stack.set(key, row);
     g.push(row);
   }
@@ -918,7 +926,7 @@ const server = http.createServer(async (req, res) => {
       const p = getPlayer(u.id);
       if(!p) return out(res, 404, { error: '尚未创建角色' });
       const c = buildCharacter(u.id);
-      const eqList = (buildBackpack(u.id).equipment || []).map(it => ({ id: it.id, name: it.name, type: it.type, quality: it.quality, stats: it.stats, desc: it.desc, location: 'backpack' }));
+      const eqList = (buildBackpack(u.id).equipment || []).map(it => ({ id: it.id, name: it.name, type: it.type, quality: it.quality, stats: it.stats, desc: it.desc, location: 'backpack', sell_unit_price: it.sell_unit_price, sellable: it.sellable, marketable: it.marketable }));
       return out(res, 200, { power: c.power, gold: p.gold, equipped: c.equipped, equipment: eqList });
     }
     if(path === '/api/rpg/equipment/equip' && method === 'POST'){
@@ -2230,6 +2238,17 @@ async function handleSell(req, res, u){
     if(path === '/api/rpg/market/list' && method === 'GET') return await handleMarketList(req, res, u);
     if(path === '/api/rpg/market/listings' && method === 'GET') return await handleMarketList(req, res, u);
     if(path === '/api/rpg/market/mine' && method === 'GET') return await handleMarketMine(req, res, u);
+    if(path === '/api/rpg/market/reference' && method === 'GET'){
+      const pr = getPlayer(u.id);
+      if(!pr) return out(res, 404, { error: '尚未创建角色' });
+      expireMarketListings();
+      const url = new URL(req.url, 'http://x');
+      const name = String(url.searchParams.get('name') || '').trim();
+      if(!name) return out(res, 200, { name:'', lowest:null, count:0 });
+      const low = get('SELECT MIN(price) AS p FROM market_listings WHERE status=? AND item_name=? AND seller_id<>?', 'active', name, u.id);
+      const cnt = get('SELECT COUNT(*) AS c FROM market_listings WHERE status=? AND item_name=? AND seller_id<>?', 'active', name, u.id).c || 0;
+      return out(res, 200, { name, lowest: low.p, count: cnt });
+    }
     if(path === '/api/rpg/market/create' && method === 'POST') return await handleMarketCreate(req, res, u);
     if(path === '/api/rpg/market/buy' && method === 'POST') return await handleMarketBuy(req, res, u);
     if(path === '/api/rpg/sell' && method === 'POST') return await handleSell(req, res, u);

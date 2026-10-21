@@ -1,6 +1,7 @@
 node_modules/
 uploads/
 data/
+temp/
 
 server.out.log
 server.err.log

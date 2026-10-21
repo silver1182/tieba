@@ -41,6 +41,28 @@ AIGC:
 
 > 以下改动已部署到线上服务器（dontdie-ai.com，systemd + nginx HTTPS），尚未发布正式版本号。
 
+### 玩家体验打磨：定价统一、出售保护、上架参考价与新手引导（2026-10-20）
+
+1. **服务端统一售价与可售性字段**
+   - `server.mjs` 新增 `sellPriceFor` / `itemSellable` / `itemMarketable`，`buildBackpack` 与装备列表接口为每件物品返回 `sell_unit_price` / `sellable` / `marketable`；前端删除自行维护的 `BP_SELL_QUALITY_PRICE` / `BP_SELL_MATERIAL_PRICE` 预估价表，`sellPricePreview` 直接展示服务端价格，杜绝“预估与成交不一致”。
+
+2. **背包操作菜单按类型与可售性显隐**
+   - `public/app.js` 菜单按物品类型与服务端 `sellable` / `marketable` 只显示有效操作：装备显示穿戴；不可出售/不可上架时隐藏按钮并注明原因（“该材料暂不可出售”等），减少玩家点到服务端拒绝。
+
+3. **出售确认弹窗：品质、属性与装备对比警示**
+   - 新增 `findEquippedByType` / `equipCompareHtml`：装备出售确认展示品质、关键属性、与当前装备同部位对比（攻击/防御差值）；若目标装备优于当前装备，弹窗加强警示（“可能比当前装备更强”高亮提醒），防误卖。
+
+4. **批量出售“全部”与总收入预览**
+   - 材料批量出售增加“全部”快捷按钮，实时显示“单价 × 数量 = 总收入”，服务端继续校验数量。
+
+5. **上架确认：数量/总价/手续费/到账与参考价**
+   - 上架确认弹窗展示数量、总价、手续费、实际到账金额，说明“成交前物品锁定、取消时返还”；新增 `GET /api/rpg/market/reference?name=` 返回同类物品在售最低价与在售数，作为定价参考。
+
+6. **轻量新手引导（推荐下一步）**
+   - `index.html` 新增引导条容器，`app.js` 新增 `GUIDE_STEPS` / `renderGuideBar`：新角色创建后主界面显示可跳过的“推荐下一步”提示条（查看角色 → 打第一章副本 → 背包装备 → 领目标奖励），步骤随 `switchView` / `equipItem` / `claimAchievement` 等行为自动推进或勾选，可一键关闭。
+
+- 校验：`node --check server.mjs`、`node --check public/app.js` 通过；隔离冒烟测试（端口 3999 临时库）13/13 通过（注册建角、背包三字段、副本通关、装备/材料出售按服务端价、不可售拒绝、市场参考价、上架创建、我的挂单字段）；待部署线上并复验。
+
 ### P1 每日任务系统（2026-10-19）
 
 1. **每日任务生成**

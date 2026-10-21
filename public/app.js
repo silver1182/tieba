@@ -125,6 +125,53 @@ function qualityBadge(q) { return `<span class="q-badge ${QUALITY_CLASS[q] || 'q
 let ME = null;
 let rpg = { char: null, gold: 0, backpack: null, dungeon: null, forge: null, shop: null, goals: null };
 let currentBackpackTab = 'equipment';
+/* ---------- 新手指引（体验打磨第 6 条）：新角色可跳过的"推荐下一步"提示条 ---------- */
+const GUIDE_STEPS = [
+  { key: 'char', view: 'character', label: '查看角色' },
+  { key: 'dungeon', view: 'dungeon', label: '打第一章副本' },
+  { key: 'equip', view: 'backpack', label: '背包装备' },
+  { key: 'reward', view: 'achievements', label: '领目标奖励' }
+];
+function guideState() {
+  const c = rpg.char || {};
+  let st = {};
+  try { st = JSON.parse(localStorage.getItem('rpg_guide') || '{}') || {}; } catch (e) { st = {}; }
+  if (st.dismiss) return null;
+  const steps = [
+    { ...GUIDE_STEPS[0], done: !!st.char },
+    { ...GUIDE_STEPS[1], done: (c.boss_kills_ch1 || 0) > 0 },
+    { ...GUIDE_STEPS[2], done: (c.equipped || []).length > 0 },
+    { ...GUIDE_STEPS[3], done: !!st.reward }
+  ];
+  if (steps.every(x => x.done)) return null;
+  return steps;
+}
+function markGuideStep(key) {
+  if (!key) return;
+  let st = {};
+  try { st = JSON.parse(localStorage.getItem('rpg_guide') || '{}') || {}; } catch (e) { st = {}; }
+  st[key] = true;
+  localStorage.setItem('rpg_guide', JSON.stringify(st));
+  renderGuideBar();
+}
+function dismissGuide() {
+  let st = {};
+  try { st = JSON.parse(localStorage.getItem('rpg_guide') || '{}') || {}; } catch (e) { st = {}; }
+  st.dismiss = true;
+  localStorage.setItem('rpg_guide', JSON.stringify(st));
+  const bar = $('#guideBar');
+  if (bar) bar.classList.add('hidden');
+}
+function renderGuideBar() {
+  const bar = $('#guideBar');
+  if (!bar) return;
+  const steps = guideState();
+  if (!steps) { bar.classList.add('hidden'); return; }
+  const cur = steps.findIndex(x => !x.done);
+  const items = steps.map((x, i) => `<span class="guide-step ${i < cur ? 'done' : ''} ${i === cur ? 'cur' : ''}">${i < cur ? '✅' : i === cur ? '👉' : '○'} ${esc(x.label)}</span>`).join('<span class="guide-arrow">→</span>');
+  bar.innerHTML = `<div class="guide-inner"><span class="guide-tag">推荐下一步</span> ${items} <button class="ghost sm guide-go" data-action="guide-go" data-view="${steps[cur].view}">前往</button> <button class="ghost sm" data-action="guide-dismiss">跳过</button></div>`;
+  bar.classList.remove('hidden');
+}
 let currentForgeTab = 'material';
 let currentShopTab = 'all';
 let shopBuying = false;
@@ -145,7 +192,7 @@ function setNav(view) {
 }
 function switchView(view) {
   setNav(view);
-  if (view === 'character') viewCharacter();
+  if (view === 'character') { markGuideStep('char'); viewCharacter(); }
   else if (view === 'backpack') viewBackpack();
   else if (view === 'dungeon') viewDungeon();
   else if (view === 'forge') viewForge();
@@ -153,6 +200,7 @@ function switchView(view) {
   else if (view === 'market') viewMarket();
   else if (view === 'achievements') viewAchievements();
   else if (view === 'leaderboard') viewLeaderboard();
+  renderGuideBar();
 }
 
 /* ---------- 全局事件委托 ---------- */
@@ -167,9 +215,12 @@ document.addEventListener('click', async e => {
   else if (a === 'bp-tab') { currentBackpackTab = el.dataset.tab; renderBackpackList(); }
   else if (a === 'bp-menu') openBackpackMenu(Number(el.dataset.id));
   else if (a === 'bp-menu-equip') { closeModal(); equipItem(Number(el.dataset.id)); }
-  else if (a === 'bp-sell') openSellConfirm(Number(el.dataset.id));
+  else if (a === 'bp-sell') await openSellConfirm(Number(el.dataset.id));
   else if (a === 'bp-sell-submit') sellItem();
+  else if (a === 'bp-sell-all') { const q = $('#bpSellQty'); if (q) { q.value = q.max; q.dispatchEvent(new Event('input')); } }
   else if (a === 'bp-market') openMarketSell(Number(el.dataset.id));
+  else if (a === 'guide-go') { const v = el.dataset.view; if (v) switchView(v); }
+  else if (a === 'guide-dismiss') dismissGuide();
   else if (a === 'forge-tab') { currentForgeTab = el.dataset.tab; renderForgeList(); }
   else if (a === 'forge-qty') updateForgeQty(el.dataset.index);
   else if (a === 'forge') forgeItem(el.dataset.kind, el.dataset.key, Number(el.dataset.index));
@@ -541,7 +592,9 @@ async function createCharacter(race) {
     rpg.gold = d.character.gold;
     updateGold();
     toast('角色创建成功！');
+    localStorage.setItem('rpg_guide', JSON.stringify({}));
     viewCharacter();
+    renderGuideBar();
   } catch (e) { toast(e.message, true); }
 }
 
@@ -694,6 +747,7 @@ async function equipItem(id) {
     const d = await api('/api/rpg/equipment/equip', { method: 'POST', body: { item_id: Number(id) } });
     rpg.char = d.character; rpg.gold = d.character.gold; updateGold();
     toast('装备成功，战力 ' + d.character.power);
+    markGuideStep('equip');
     await viewBackpack();
   } catch (e) { toast(e.message, true); }
 }
@@ -708,21 +762,16 @@ async function unequipItem(id) {
   } catch (e) { toast(e.message, true); }
 }
 
-/* ================================================================
- * 背包操作菜单 / 出售给 NPC（体验打磨）
- * ================================================================ */
-const BP_SELL_QUALITY_PRICE = { normal: 10, fine: 25, superb: 60, rare: 150, legendary: 400 };
-const BP_SELL_MATERIAL_PRICE = { '枯木': 8, '粗糙皮革': 15, '黑铁矿': 25, '黑狼牙': 30, '净化碎片': 35 };
+/* ---------- 背包操作菜单 / 出售给 NPC（体验打磨） ---------- */
 function findBackpackItem(id) {
   const b = rpg.backpack || {};
   const arr = [...(b.equipment || []), ...(b.material || [])];
   return arr.find(it => Number(it.id) === Number(id)) || null;
 }
+/* 单价一律以服务端返回的 sell_unit_price 为准（体验打磨第 1 条，前端不再维护预估价表） */
 function sellPricePreview(it) {
   if (!it) return 0;
-  if (['weapon', 'armor', 'accessory'].includes(it.type)) return BP_SELL_QUALITY_PRICE[it.quality] || 0;
-  if (it.type === 'material') return BP_SELL_MATERIAL_PRICE[it.name] || 0;
-  return 0;
+  return Number(it.sell_unit_price) || 0;
 }
 function openBackpackMenu(id) {
   if (backpackBusy) return;
@@ -733,8 +782,10 @@ function openBackpackMenu(id) {
   const isEquip = ['weapon', 'armor', 'accessory'].includes(it.type);
   const actions = [];
   if (isEquip) actions.push(`<button class="primary block" data-action="bp-menu-equip" data-id="${it.id}">👔 穿戴</button>`);
-  actions.push(`<button class="primary block" data-action="bp-sell" data-id="${it.id}">💰 出售给 NPC${unit ? `<span class="muted">（单价 🪙 ${unit}）</span>` : ''}</button>`);
-  actions.push(`<button class="primary block" data-action="bp-market" data-id="${it.id}">🏷️ 上架交易行</button>`);
+  if (it.sellable) actions.push(`<button class="primary block" data-action="bp-sell" data-id="${it.id}">💰 出售给 NPC<span class="muted">（单价 🪙 ${unit}）</span></button>`);
+  else if (it.type === 'consumable' || it.type === 'quest') actions.push(`<p class="muted">该物品暂不可出售给 NPC</p>`);
+  if (it.marketable) actions.push(`<button class="primary block" data-action="bp-market" data-id="${it.id}">🏷️ 上架交易行</button>`);
+  else if (it.type === 'consumable' || it.type === 'quest') actions.push(`<p class="muted">该物品不可上架交易行</p>`);
   openModal(`
     <h3 class="modal-title">${esc(it.name)} ${qualityBadge(it.quality)}</h3>
     <div class="modal-body">
@@ -747,10 +798,40 @@ function openBackpackMenu(id) {
     <div class="modal-actions"><button class="ghost" data-action="close-modal">关闭</button></div>
   `);
 }
-function openSellConfirm(id) {
+function findEquippedByType(type) {
+  const eq = (rpg.char && rpg.char.equipped) || [];
+  return eq.find(x => x.type === type) || null;
+}
+/* 装备出售对比：与当前佩戴装备逐条比较，优于当前则返回 better=true 加强警示（体验打磨第 3 条） */
+function equipCompareHtml(it) {
+  const cur = findEquippedByType(it.type);
+  const myPower = calcPower(it.stats || {});
+  if (!cur) return { html: `<div class="equip-cmp"><p class="muted">当前未佩戴该部位装备，出售战力 ${myPower}</p></div>`, better: false, myPower, curPower: 0 };
+  const lines = [];
+  const keys = ['max_hp', 'attack', 'defense', 'crit_rate', 'crit_dmg', 'gold_bonus'];
+  for (const k of keys) {
+    const a = Number((it.stats || {})[k]) || 0;
+    const b = Number((cur.stats || {})[k]) || 0;
+    if (!a && !b) continue;
+    const label = STAT_CN[k] || k;
+    const pct = PCT_KEYS.includes(k) ? '%' : '';
+    const sa = `${a}${pct}`;
+    const sb = `${b}${pct}`;
+    if (a > b) lines.push(`<span class="cmp-better">${label} ${sa}（当前 ${sb}）↑</span>`);
+    else if (a < b) lines.push(`<span class="cmp-worse">${label} ${sa}（当前 ${sb}）↓</span>`);
+    else lines.push(`<span class="muted">${label} ${sa}（持平）</span>`);
+  }
+  const curPower = calcPower(cur.stats || {});
+  return { html: `<div class="equip-cmp"><p class="muted">与当前佩戴对比：战力 ${myPower} vs ${curPower}</p>${lines.join('')}</div>`, better: myPower > curPower, myPower, curPower };
+}
+async function openSellConfirm(id) {
   if (backpackBusy) return;
   const it = findBackpackItem(id);
   if (!it) { toast('物品不存在或已变化', true); return; }
+  if (!rpg.char) {
+    try { const d = await api('/api/rpg/character'); rpg.char = d.character; rpg.gold = d.character.gold; updateGold(); }
+    catch (e) { toast(e.message, true); return; }
+  }
   const unit = sellPricePreview(it);
   if (!unit) { toast('该物品无法估价出售', true); return; }
   backpackSelId = id;
@@ -764,6 +845,10 @@ function openSellConfirm(id) {
         <label class="field"><span>出售数量</span>
           <input type="number" id="bpSellQty" value="1" min="1" max="${max}">
         </label>
+        <div class="sell-qty-row">
+          <button class="ghost sm" data-action="bp-sell-all">全部（×${max}）</button>
+          <span class="muted">单价 × 数量 = 总收入</span>
+        </div>
         <p class="sell-preview">预计获得 <b class="gold-strong">🪙 <span id="bpSellGain">${unit}</span></b> 金币</p>
       </div>
       <div class="modal-actions">
@@ -779,13 +864,18 @@ function openSellConfirm(id) {
       if (g) g.textContent = unit * v;
     });
   } else {
+    const cmp = equipCompareHtml(it);
+    const warn = cmp.better
+      ? `<p class="sell-warn">⚠️ 这件装备战力 ${cmp.myPower}，高于当前佩戴（${cmp.curPower}），出售后无法找回，确定要卖掉吗？</p>`
+      : `<p class="sell-warn">⚠️ 出售后无法找回，确定出售吗？</p>`;
     backpackSell = { id, qty: 1, name: it.name, gain: unit, unit };
     openModal(`
-      <h3 class="modal-title">出售 ${esc(it.name)}</h3>
+      <h3 class="modal-title">出售 ${esc(it.name)} ${qualityBadge(it.quality)}</h3>
       <div class="modal-body">
         <p class="muted">出售给 NPC，回收价 <b class="gold-strong">🪙 ${unit}</b> 金币</p>
         ${it.stats && Object.keys(it.stats).length ? `<div class="item-stats">${statsText(it.stats)}</div>` : ''}
-        <p class="sell-warn">⚠️ 出售后无法找回，确定出售吗？</p>
+        ${cmp.html}
+        ${warn}
       </div>
       <div class="modal-actions">
         <button class="danger" data-action="bp-sell-submit">确认出售</button>
@@ -1689,7 +1779,35 @@ async function openMarketSell(preselectId) {
     renderMarketSellModal();
   } catch (e) { toast(e.message, true); }
 }
+/* 上架参考价：查询同类在售最低价（不含自己的挂单，体验打磨第 5 条） */
+async function loadMarketRef(name) {
+  const el = $('#marketRef');
+  if (!el) return;
+  el.textContent = '参考价查询中…';
+  try {
+    const d = await api(`/api/rpg/market/reference?name=${encodeURIComponent(name)}`);
+    el.textContent = (d && d.lowest)
+      ? `参考价：同类物品在售最低价 🪙 ${d.lowest}（不含你的挂单，共 ${d.count} 单）`
+      : '参考价：暂无同类物品在售，可自行定价';
+  } catch (e) { el.textContent = '参考价：查询失败，可自行定价'; }
+}
+/* 上架摘要：数量 × 单价 = 总价，扣 5% 手续费后实际到账 */
+function refreshMarketSummary() {
+  const it = marketSellSel >= 0 ? marketSellItems[marketSellSel] : null;
+  if (!it) return;
+  const qtyEl = $('#sellQty'), priceEl = $('#sellPrice');
+  const qty = it.type === 'material' ? (Math.max(1, Math.min(it.quantity, Number(qtyEl?.value) || 1))) : 1;
+  const price = Number(priceEl?.value) || 0;
+  const total = qty * price;
+  const fee = Math.floor(total * 0.05);
+  const gain = total - fee;
+  const t = $('#marketTotal'), f = $('#marketFee'), g = $('#marketGain');
+  if (t) t.textContent = total;
+  if (f) f.textContent = fee;
+  if (g) g.textContent = gain;
+}
 function renderMarketSellModal() {
+  const it = marketSellSel >= 0 ? marketSellItems[marketSellSel] : null;
   openModal(`
     <h3 class="modal-title">上架物品</h3>
     <div class="modal-body">
@@ -1701,25 +1819,33 @@ function renderMarketSellModal() {
             <span class="muted">×${it.quantity}${it.type === 'material' ? '（可上架部分）' : ''}</span>
           </div>`).join('')}
       </div>
-      ${marketSellSel >= 0 ? `
+      ${it ? `
       <div class="sell-form">
         <label class="field"><span>数量</span>
-          <input type="number" id="sellQty" value="${marketSellItems[marketSellSel].sellQty}" min="1" max="${marketSellItems[marketSellSel].quantity}" ${marketSellItems[marketSellSel].type === 'material' ? '' : 'disabled'}>
+          <input type="number" id="sellQty" value="${it.sellQty}" min="1" max="${it.quantity}" ${it.type === 'material' ? '' : 'disabled'}>
         </label>
         <label class="field"><span>单价（金币）</span>
           <input type="number" id="sellPrice" value="100" min="1" max="500000">
         </label>
-        <p class="muted">成交后收取 5% 手续费，卖家实得 95%</p>
+        <div class="market-summary">
+          <p class="muted">数量 <b>${it.type === 'material' ? it.sellQty : 1}</b> × 单价 🪙 <b>${100}</b> = 总价 🪙 <b id="marketTotal">${(it.type === 'material' ? it.sellQty : 1) * 100}</b></p>
+          <p class="muted">手续费（5%）🪙 <b id="marketFee">${Math.floor(((it.type === 'material' ? it.sellQty : 1) * 100) * 0.05)}</b> · 实际到账 🪙 <b class="gold-strong" id="marketGain">${((it.type === 'material' ? it.sellQty : 1) * 100) - Math.floor(((it.type === 'material' ? it.sellQty : 1) * 100) * 0.05)}</b></p>
+          <p id="marketRef" class="muted">参考价查询中…</p>
+          <p class="sell-warn">⚠️ 挂单期间物品锁定在交易行，成交前无法使用；取消挂单后物品返还背包。</p>
+        </div>
       </div>` : '<p class="muted">请选择要出售的物品</p>'}
     </div>
     <div class="modal-actions">
       <button class="primary" data-action="market-sell-submit" ${marketSellSel < 0 ? 'disabled' : ''}>确认上架</button>
       <button class="ghost" data-action="close-modal">取消</button>
     </div>`);
-  if (marketSellSel >= 0) {
-    const it = marketSellItems[marketSellSel];
+  if (it) {
     const q = $('#sellQty');
-    if (q) q.addEventListener('input', () => { it.sellQty = Math.max(1, Math.min(it.quantity, Number(q.value) || 1)); q.value = it.sellQty; });
+    if (q) q.addEventListener('input', () => { it.sellQty = Math.max(1, Math.min(it.quantity, Number(q.value) || 1)); q.value = it.sellQty; refreshMarketSummary(); });
+    const pr = $('#sellPrice');
+    if (pr) pr.addEventListener('input', refreshMarketSummary);
+    refreshMarketSummary();
+    loadMarketRef(it.name);
   }
 }
 function selectMarketSellItem(idx) {
@@ -1813,6 +1939,7 @@ async function claimAchievement(code) {
     toast(`成就「${d.rewards && d.rewards.name ? d.rewards.name : '已领取'}」奖励到账 🪙 ${d.rewards ? d.rewards.gold : 0}`);
     rpg.gold = d.gold;
     updateGold();
+    markGuideStep('reward');
     viewAchievements();
   } catch (e) { toast(e.message, true); }
 }
@@ -1905,6 +2032,7 @@ function enterShell() {
   $('#shell').classList.remove('hidden');
   renderShellUser();
   viewCharacter();
+  renderGuideBar();
   connectChat();
 }
 
