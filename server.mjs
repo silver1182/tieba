@@ -1483,7 +1483,7 @@ function simulateBattle(playerRow, monsterKey, opts){
   const monster = MONSTER_CONFIG[monsterKey];
   if(!monster) throw Error('未知怪物');
   const m = { hp: monster.hp, maxHp: monster.hp, atk: monster.attack, def: monster.defense };
-  const pb = { atkMulNext: 1, noCritNext: false, shieldReduceNext: false, defDown: 0, defDownT: 0, curse: 0, curseT: 0, bleed: 0, bleedT: 0, healUsed: 0 };
+  const pb = { atkMulNext: 1, noCritNext: false, shieldReduceNext: false, defDown: 0, defDownT: 0, curse: 0, curseT: 0, bleed: 0, bleedT: 0, healUsed: 0, dmgSrc: {} };
   const mb = { armor: 0, armorUses: 0, turns: 0, hitCount: 0, healUsed: false, summonUsed: false };
   const log = [];
   const hpTrace = [];
@@ -1523,6 +1523,7 @@ function simulateBattle(playerRow, monsterKey, opts){
     log.push('第' + mb.turns + '回合 你攻击造成 ' + dmg + ' 伤害' + (wasCrit ? '（暴击）' : ''));
     if(wasCrit && monster.crit_counter){
       stats.cur_hp -= monster.crit_counter;
+      pb.dmgSrc['敌人反弹'] = (pb.dmgSrc['敌人反弹'] || 0) + monster.crit_counter;
       log.push('敌人反弹暴击，你受到 ' + monster.crit_counter + ' 点伤害');
     }
     if(monster.armor_on_hit_every && mb.hitCount % monster.armor_on_hit_every === 0 && mb.armorUses < monster.armor_on_hit_max){
@@ -1573,9 +1574,11 @@ function simulateBattle(playerRow, monsterKey, opts){
     if(monster.shield_extra) dmg += monster.shield_extra;
     if(monster.frenzy_hp && m.hp < m.maxHp * monster.frenzy_hp && monster.frenzy_dot) dmg += monster.frenzy_dot;
     stats.cur_hp -= dmg;
+    pb.dmgSrc['敌人攻击'] = (pb.dmgSrc['敌人攻击'] || 0) + dmg;
     log.push('第' + mb.turns + '回合 敌人攻击造成 ' + dmg + ' 伤害' + (rend ? '（撕裂）' : ''));
     if(pb.bleedT > 0){
       stats.cur_hp -= pb.bleed;
+      pb.dmgSrc['流血'] = (pb.dmgSrc['流血'] || 0) + pb.bleed;
       log.push('流血造成 ' + pb.bleed + ' 伤害');
     }
     if(monster.no_crit_next && rollPct(monster.no_crit_next.pct)){
@@ -1612,7 +1615,7 @@ function simulateBattle(playerRow, monsterKey, opts){
   const win = m.hp <= 0;
   stats.cur_hp = Math.max(0, Math.min(stats.max_hp, stats.cur_hp));
   stmt('UPDATE player SET cur_hp=? WHERE user_id=?', stats.cur_hp, playerRow.user_id);
-  return { win, curHp: stats.cur_hp, turns: mb.turns, log, hpTrace, healUsed: pb.healUsed };
+  return { win, curHp: stats.cur_hp, turns: mb.turns, log, hpTrace, healUsed: pb.healUsed, dmgSrc: Object.entries(pb.dmgSrc).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, dmg]) => ({ name, dmg })) };
 }
 
 /* 副本事件生成：4格，至少1普通战斗+至少1非战斗，精英25%，Boss固定第4格 */
@@ -1819,7 +1822,7 @@ async function handleDungeonEvent(req, res, u){
     const fullHp = computeStats(p, getPlayerItems(u.id)).max_hp;
     p.cur_hp = fullHp;
     stmt('UPDATE player SET cur_hp=? WHERE user_id=?', fullHp, u.id);
-    return out(res, 200, { ok: true, win: false, monster: ev.monster, gold_loss: loss, cur_hp: fullHp, log: battle.log, hpTrace: battle.hpTrace, playerName: u.display_name || u.username, finished: true, failed: true });
+    return out(res, 200, { ok: true, win: false, monster: ev.monster, gold_loss: loss, turns: battle.turns, heal_used: battle.healUsed, damage_sources: battle.dmgSrc, cur_hp: fullHp, log: battle.log, hpTrace: battle.hpTrace, playerName: u.display_name || u.username, finished: true, failed: true });
   }
   const choice = Number(b.choice) || 1;
   const r = handleEncounter(p, ev, choice, s);
@@ -1865,8 +1868,18 @@ function handleDungeonStatus(req, res, u){
   const today = localDateStr();
   const used = p.last_dungeon_date === today ? p.daily_count : 0;
   const s = dungeonSessions.get(u.id);
+  const chapters = [1, 2].map(ch => {
+    const cfg = CHAPTER_CONFIG[ch] || CHAPTER_CONFIG[1];
+    const boss = MONSTER_CONFIG[cfg.boss] || { hp: 0, attack: 0, defense: 0 };
+    let hard = 0;
+    for(const mk of (cfg.normal || []).concat(cfg.elite || [])){
+      const m = MONSTER_CONFIG[mk];
+      if(m) hard = Math.max(hard, calcPower(m.hp, m.attack, m.defense, 0, 0, 0));
+    }
+    return { chapter: ch, name: cfg.name, boss: cfg.boss, recommend_power: calcPower(boss.hp, boss.attack, boss.defense, 0, 0, 0), hard_power: hard };
+  });
   return out(res, 200, {
-    remaining: Math.max(0, DUNGEON_DAILY_LIMIT - used), daily_used: used,
+    remaining: Math.max(0, DUNGEON_DAILY_LIMIT - used), daily_used: used, chapters,
     chapter: p.chapter, level: p.level, boss_kills_ch1: p.boss_kills_ch1, boss_kills_ch2: p.boss_kills_ch2,
     ch2_unlocked: p.level >= 3 && p.boss_kills_ch1 >= 1,
     auto_potion: { enabled: p.auto_potion !== 0, threshold: p.potion_threshold != null ? p.potion_threshold : 35, limit: p.potion_limit != null ? p.potion_limit : 1 },
