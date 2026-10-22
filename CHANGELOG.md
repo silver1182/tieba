@@ -2,6 +2,17 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: b3d9dfb1989d5de331291901cce023f8_f37cf6c8cd2c11f1afbb52540064ee0f
+    ReservedCode1: d4Ikp9rlhNSfxeHv9sU4j7F2+dHRy+I0cW7fnnjYRZUgfWjtRgCDvv25d0KRn+zYzgNfFgvhrMSseSd3CJQAr+BiFOYlj1xAeiOf860Gl+zGfs1CkokFh9BG8k1l+9Lx3Ulk20wP5tTxZi064isoT2gPwa4jUAsd8d2qYRLLRrXDakeg1laH6NukMT0=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: b3d9dfb1989d5de331291901cce023f8_f37cf6c8cd2c11f1afbb52540064ee0f
+    ReservedCode2: d4Ikp9rlhNSfxeHv9sU4j7F2+dHRy+I0cW7fnnjYRZUgfWjtRgCDvv25d0KRn+zYzgNfFgvhrMSseSd3CJQAr+BiFOYlj1xAeiOf860Gl+zGfs1CkokFh9BG8k1l+9Lx3Ulk20wP5tTxZi064isoT2gPwa4jUAsd8d2qYRLLRrXDakeg1laH6NukMT0=
+---
+
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
     ProduceID: b3d9dfb1989d5de331291901cce023f8_d91d586cc93a11f18533525400638852
     ReservedCode1: vKsH0+rdOkaY+e4Ehl8Hhao0ZWDOTTLs3g32xHR6JxiTR0G9r/GSuoOKGSNY+f889wim+6+TXyrMuKfHMNy1oVLcpP9UimG2kV+WpH46Ng8JRuID1Om8xrQgsWpVD7Dd3vYgzJz7HoXSZdz2LZbhjrE67r1a1gvi8CXVIF3BXOCCP2eKZEyMnGaZ760=
     ContentPropagator: 001191440300708461136T1XGW3
@@ -40,6 +51,25 @@ AIGC:
 ## Unreleased（未发布）
 
 > 以下改动已部署到线上服务器（dontdie-ai.com，systemd + nginx HTTPS），尚未发布正式版本号。
+
+### 玩家体验打磨（第四轮）：失败恢复路线 / 金币循环 / 统一领奖 / 批量出售 / 快捷定价（2026-10-22）
+
+1. **失败后个性化恢复路线（P0）**
+   - 服务端记录最近一次失败（`last_fail`：怪物/位置/日期/伤害来源 Top3/金币损失），结算时按实际战斗记录给出最多 2 条针对性建议与直达按钮（换装 / 补药 / 强化 / 再次挑战）；副本入口显示上次失败原因与今日剩余次数。
+
+2. **金币成长投入-回报循环（P1）**
+   - 副本入口展示今日剩余次数 / 预计消耗 / 主要收益；金币不足以备药时提示「还差 X 金币」并引导前往背包出售或交易行上架；结算合并展示金币净变化（获得 - 损失 = 净收益），不再单列混乱的得失。
+
+3. **统一奖励领取（P1）**
+   - 汇总章节目标 / 每日任务 / 成就的可领取奖励，结算后优先展示刚完成的奖励；底部与侧边导航角标区分「有奖励（黄色数字）」与「有新内容（灰色“新”标）」，基于本地已读记录（`rpg_reward_seen`）。
+
+4. **装备决策与背包批量整理（P2）**
+   - 装备对比新增综合结论（推荐穿戴 / 不建议替换 / 持平）与「一键换上」直达按钮，防误卖；背包新增批量多选出售，默认排除当前穿戴、任务物品与不可出售项，实时显示已选件数与预计收益。
+
+5. **交易行快捷定价（P2）**
+   - 上架时查询同类在售最低价（不含自己挂单）作为参考价并注明来源，一键套用「低价快出 / 参考价 / 稍高试挂」三档快捷价，实时显示预计到手金额；挂单按状态分组展示。
+
+- 校验：`node --check public/app.js` 通过；SFTP 上传 `public/app.js` / `public/style.css` / `server.mjs` 并重启 tieba 后线上复验（首页 200、style.css 200、核心接口可达、远端 app.js 与 server.mjs 含新特征）。
 
 ### 玩家体验修复（第三轮）：副本解锁展示 / 交易行交互锁定 / 装备操作简化（2026-10-21）
 
@@ -345,6 +375,7 @@ AIGC:
 
 - `server.mjs` 与 `public/app.js` 均通过 `node --check` 语法校验；CSS 括号平衡检查通过。
 - `uploads/` 目录由服务启动时自动创建。
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*

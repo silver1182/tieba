@@ -719,3 +719,32 @@ button.primary.small{padding:5px 12px;font-size:12px}
 .chapter-req b{color:var(--text)}
 .dungeon-warn{margin-top:14px;padding:10px 14px;border-radius:12px;background:rgba(249,115,22,.08);border:1px solid rgba(249,115,22,.3);font-size:13px;line-height:1.7}
 .dungeon-warn b{color:#fb923c}
+
+/* ===== 第二轮评审 P0~P2：失败恢复 / 金币循环 / 统一奖励 / 批量背包 / 快捷定价 ===== */
+.fail-remain-card{background:rgba(248,113,113,.05);border:1px solid rgba(248,113,113,.3)}
+.badge-new{background:#64748b !important;animation:none !important}
+.bp-batch-toggle{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.bp-batch-toggle .ghost.active{color:#fbbf24;border-color:#fbbf24;background:#fbbf2414}
+.bp-batch-bar{display:flex;align-items:center;gap:10px;margin-top:12px;padding:10px 12px;border-radius:12px;background:var(--panel2);border:1px solid var(--line);flex-wrap:wrap}
+.bp-batch-bar b{color:var(--text)}
+.bp-check{position:absolute;top:8px;left:8px;z-index:2;display:block;width:18px;height:18px;cursor:pointer}
+.bp-check input{width:18px;height:18px;accent-color:#f59e0b;cursor:pointer}
+.item-card{position:relative}
+.stack-row{position:relative}
+.quick-price-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0;font-size:12px}
+.quick-price-row .ghost{white-space:nowrap}
+.equip-cmp{margin-top:10px;padding:10px 12px;border-radius:10px;background:var(--panel2);border:1px solid var(--line);font-size:13px;text-align:left}
+.cmp-conclusion{font-weight:700;font-size:14px;margin-bottom:4px}
+.reward-center{margin-bottom:14px;padding:12px 14px;border-radius:12px;background:linear-gradient(135deg,#fbbf2418,#f59e0b08);border:1px solid rgba(251,191,36,.35)}
+.reward-center .rc-row{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.reward-center .rc-item{flex:1;min-width:120px;text-align:center;padding:8px 6px;border-radius:10px;background:rgba(255,255,255,.04)}
+.reward-center .rc-item b{font-size:20px;color:#fbbf24;display:block}
+.reward-center .rc-item span{font-size:12px;color:var(--muted)}
+.reward-pending{position:relative;overflow:hidden;border-color:rgba(251,191,36,.45) !important}
+.reward-pending::before{content:"可领取";position:absolute;top:8px;right:-22px;transform:rotate(38deg);background:linear-gradient(135deg,#fbbf24,#f59e0b);color:#1c1206;font-size:10px;font-weight:800;padding:3px 26px;z-index:1}
+.r-done-line{margin-top:12px;padding:12px 14px;border-radius:12px;background:var(--panel2);border:1px solid var(--line)}
+.r-done-line + .r-done-line{margin-top:8px}
+.r-done-title{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.r-done-title b{color:var(--text);font-size:14px}
+.r-done-reward{font-size:13px;color:var(--muted);margin-top:4px}
+.r-done-reward b{color:#fbbf24}

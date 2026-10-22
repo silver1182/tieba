@@ -116,16 +116,36 @@ function riskOf(power, rec) {
   return { level: '高', cls: 'risk-high' };
 }
 
+function loadSeenSet() {
+  try { return JSON.parse(localStorage.getItem('rpg_reward_seen') || '{}') || {}; } catch (e) { return {}; }
+}
+/* 角标区分「有奖励（黄色数字）」与「有新内容（灰色“新”标）」：新内容=较上次查看新增的已完成/解锁项 */
 function refreshRewardBadge() {
   const g = (rpg.goals || []).filter(x => x.claimable && !x.claimed).length;
   const dl = (rpg.daily && rpg.daily.tasks || []).filter(x => x.claimable && !x.claimed).length;
   const ac = (rpg.achievements || []).filter(x => x.claimable).length;
   rewardBadge = { goals: g, daily: dl, ach: ac };
+  const seen = loadSeenSet();
+  const groups = [
+    { key: 'dungeon', idOf: x => x.id, arr: (rpg.goals || []).filter(x => x.done && !x.claimed) },
+    { key: 'character', idOf: x => x.slot, arr: (rpg.daily && rpg.daily.tasks || []).filter(x => x.done && !x.claimed) },
+    { key: 'achievements', idOf: x => x.code, arr: (rpg.achievements || []).filter(x => x.unlocked && !x.claimed) }
+  ];
+  const fresh = { dungeon: 0, character: 0, achievements: 0 };
+  groups.forEach(gr => {
+    const before = (seen[gr.key] || []).map(String);
+    const cur = gr.arr.map(x => String(gr.idOf(x))).filter(Boolean);
+    gr.arr.forEach(x => { const id = String(gr.idOf(x)); if (id && !before.includes(id)) fresh[gr.key]++; });
+    seen[gr.key] = cur;
+  });
+  localStorage.setItem('rpg_reward_seen', JSON.stringify(seen));
   const map = { character: dl, dungeon: g, achievements: ac };
   Object.entries(map).forEach(([v, n]) => {
     $$('#badge-' + v).forEach(el => {
-      el.textContent = n > 0 ? (n > 99 ? '99+' : n) : '';
-      el.classList.toggle('show', n > 0);
+      const isNew = n === 0 && fresh[v] > 0;
+      el.textContent = n > 0 ? (n > 99 ? '99+' : n) : (isNew ? '新' : '');
+      el.classList.toggle('show', n > 0 || isNew);
+      el.classList.toggle('badge-new', isNew);
     });
   });
   return g + dl + ac;
@@ -223,6 +243,8 @@ let marketPage = 1; // 交易行当前页
 let backpackBusy = false; // 背包出售/菜单请求互斥（防连点）
 let backpackSell = null; // { id, qty, name, gain } 待确认出售的物品
 let backpackSelId = null; // 背包菜单选中的物品 id
+let bpBatch = { on: false, sel: new Set(), gain: 0 }; // 背包批量多选出售
+let marketRefPrice = 0; // 交易行参考价（同类在售最低价，不含自己的挂单）
 
 /* ---------- 导航 ---------- */
 function setNav(view) {
@@ -259,6 +281,12 @@ document.addEventListener('click', async e => {
   else if (a === 'bp-sell-all') { const q = $('#bpSellQty'); if (q) { q.value = q.max; q.dispatchEvent(new Event('input')); } }
   else if (a === 'bp-market') openMarketSell(Number(el.dataset.id));
   else if (a === 'bp-sort') { currentBackpackSort = el.dataset.sort; renderBackpackList(); }
+  else if (a === 'bp-batch-toggle') toggleBpBatch();
+  else if (a === 'bp-select') bpSelect(Number(el.dataset.id));
+  else if (a === 'bp-batch-clear') bpBatchClear();
+  else if (a === 'bp-batch-sell') sellBatch();
+  else if (a === 'equip-quick') { closeModal(); equipItem(Number(el.dataset.id)); }
+  else if (a === 'market-price') setQuickPrice(el.dataset.mode);
   else if (a === 'go-sell') { switchView('backpack'); setTimeout(() => { highlightSell = true; renderBackpackList(); }, 60); toast('金币不足时，可出售下方高亮的物品换金币'); }
   else if (a === 'goto-prep') { switchView(el.dataset.target); }
   else if (a === 'goto-rewards') { switchView('dungeon'); toast('到副本页下方领取章节目标 / 每日任务奖励'); }
@@ -816,9 +844,22 @@ function renderBackpackList() {
       <button class="bp-sort-btn ${currentBackpackSort === 'value' ? 'active' : ''}" data-action="bp-sort" data-sort="value">战力</button>` : `
       <button class="bp-sort-btn ${currentBackpackSort === 'value' ? 'active' : ''}" data-action="bp-sort" data-sort="value">价值</button>`}
     </div>` : '';
+  const batchToggle = ['equipment', 'material'].includes(currentBackpackTab) ? `
+    <div class="bp-batch-toggle">
+      <button class="ghost sm ${bpBatch.on ? 'active' : ''}" data-action="bp-batch-toggle">${bpBatch.on ? '✕ 退出批量' : '☑ 批量出售'}</button>
+      ${bpBatch.on ? `<span class="muted">勾选可出售物品，默认排除当前穿戴与任务物品</span>` : ''}
+    </div>` : '';
+  const batchBar = bpBatch.on ? `
+    <div class="bp-batch-bar">
+      <span class="muted">已选 <b>${bpBatch.sel.size}</b> 件 · 预计收益 <b class="gold-strong">🪙 ${bpBatch.gain}</b></span>
+      <button class="primary sm" data-action="bp-batch-sell">批量出售</button>
+      <button class="ghost sm" data-action="bp-batch-clear">清空</button>
+    </div>` : '';
+  const bpCheck = it => bpBatch.on ? `<label class="bp-check" title="${bpSelectable(it) ? '勾选后批量出售' : '默认排除（当前穿戴/任务物品/不可出售）'}" onclick="event.stopPropagation()"><input type="checkbox" data-action="bp-select" data-id="${it.id}" ${bpSelectable(it) ? '' : 'disabled'} ${bpBatch.sel.has(it.id) ? 'checked' : ''}></label>` : '';
   if (currentBackpackTab === 'equipment') {
-    wrap.innerHTML = sortRow + `<div class="item-grid">${list.map(it => `
+    wrap.innerHTML = batchToggle + sortRow + `<div class="item-grid">${list.map(it => `
       <div class="item-card ${QUALITY_CLASS[it.quality] || 'q-normal'}${highlightSell && it.sellable ? ' sell-hint-card' : ''}" data-action="bp-menu" data-id="${it.id}">
+        ${bpCheck(it)}
         <div class="item-ico">${TYPE_ICO[it.type] || '📦'}</div>
         <div class="item-name">${esc(it.name)} ${qualityBadge(it.quality)}${highlightSell && it.sellable ? `<span class="sell-hint-tag">💰 可出售</span>` : ''}</div>
         <div class="item-stats">${statsText(it.stats)}</div>
@@ -831,10 +872,11 @@ function renderBackpackList() {
           ${it.sellable ? `<button class="ghost sm" data-action="bp-sell" data-id="${it.id}">💰 出售</button>` : ''}
           ${it.marketable ? `<button class="ghost sm" data-action="bp-market" data-id="${it.id}">🏷️ 上架</button>` : ''}
         </div>
-      </div>`).join('')}</div>`;
+      </div>`).join('')}</div>` + batchBar;
   } else {
-    wrap.innerHTML = sortRow + `<div class="stack-list">${list.map(it => `
+    wrap.innerHTML = batchToggle + sortRow + `<div class="stack-list">${list.map(it => `
       <div class="stack-row glass${highlightSell && it.sellable ? ' sell-hint-card' : ''}" data-action="bp-menu" data-id="${it.id}">
+        ${bpCheck(it)}
         <span class="stack-ico">${TYPE_ICO[it.type] || '📦'}</span>
         <span class="stack-name">${esc(it.name)}${it.quality && it.quality !== 'normal' ? ' ' + qualityBadge(it.quality) : ''}${highlightSell && it.sellable ? `<span class="sell-hint-tag">💰 可出售</span>` : ''}</span>
         ${it.stats && Object.keys(it.stats).length ? `<span class="stack-stats">${statsText(it.stats)}</span>` : ''}
@@ -843,7 +885,7 @@ function renderBackpackList() {
           ${it.sellable ? `<button class="ghost sm" data-action="bp-sell" data-id="${it.id}">💰 出售</button>` : ''}
           ${it.marketable ? `<button class="ghost sm" data-action="bp-market" data-id="${it.id}">🏷️ 上架</button>` : ''}
         </div>` : ''}
-      </div>`).join('')}</div>`;
+      </div>`).join('')}</div>` + batchBar;
   }
 }
 
@@ -885,8 +927,13 @@ function openBackpackMenu(id) {
   backpackSelId = id;
   const unit = sellPricePreview(it);
   const isEquip = ['weapon', 'armor', 'accessory'].includes(it.type);
+  const cmpE = isEquip ? equipCompareHtml(it) : null;
   const actions = [];
-  if (isEquip) actions.push(`<button class="primary block" data-action="bp-menu-equip" data-id="${it.id}">👔 穿戴</button>`);
+  if (isEquip && cmpE) {
+    actions.push(cmpE.better
+      ? `<button class="primary block" data-action="equip-quick" data-id="${it.id}">⚡ 一键换上（战力 ${cmpE.myPower}，提升 +${cmpE.myPower - cmpE.curPower}）</button>`
+      : `<button class="primary block" data-action="bp-menu-equip" data-id="${it.id}">👔 穿戴</button>`);
+  }
   if (it.sellable) actions.push(`<button class="primary block" data-action="bp-sell" data-id="${it.id}">💰 出售给 NPC<span class="muted">（单价 🪙 ${unit}）</span></button>`);
   else if (it.type === 'consumable' || it.type === 'quest') actions.push(`<p class="muted">该物品暂不可出售给 NPC</p>`);
   if (it.marketable) actions.push(`<button class="primary block" data-action="bp-market" data-id="${it.id}">🏷️ 上架交易行</button>`);
@@ -896,7 +943,7 @@ function openBackpackMenu(id) {
     <div class="modal-body">
       <div class="item-info-line">${TYPE_ICO[it.type] || '📦'} ${it.quantity ? `数量 ×${it.quantity}` : ''}</div>
       ${isEquip && it.stats && Object.keys(it.stats).length ? `<div class="item-stats">${statsText(it.stats)}</div>` : ''}
-      ${isEquip ? equipCompareHtml(it).html : ''}
+      ${isEquip ? cmpE.html : ''}
       ${it.desc ? `<div class="item-desc">${esc(it.desc)}</div>` : ''}
       <div class="bp-menu-actions">${actions.join('')}</div>
       <p class="muted">出售与上架仅限背包中的物品，穿戴或挂单中的物品不可操作。</p>
@@ -908,11 +955,11 @@ function findEquippedByType(type) {
   const eq = (rpg.char && rpg.char.equipped) || [];
   return eq.find(x => x.type === type) || null;
 }
-/* 装备出售对比：与当前佩戴装备逐条比较，优于当前则返回 better=true 加强警示（体验打磨第 3 条） */
+/* 装备对比：与当前佩戴装备逐条比较并给综合结论（P2：装备决策） */
 function equipCompareHtml(it) {
   const cur = findEquippedByType(it.type);
   const myPower = calcPower(it.stats || {});
-  if (!cur) return { html: `<div class="equip-cmp"><p class="muted">当前未佩戴该部位装备，出售战力 ${myPower}</p></div>`, better: false, myPower, curPower: 0 };
+  if (!cur) return { html: `<div class="equip-cmp"><p class="muted">当前未佩戴该部位装备，出售战力 ${myPower}</p><p class="cmp-conclusion cmp-better">综合结论：可直接穿戴提升战力（${myPower}）</p></div>`, better: true, myPower, curPower: 0 };
   const lines = [];
   const keys = ['max_hp', 'attack', 'defense', 'crit_rate', 'crit_dmg', 'gold_bonus'];
   for (const k of keys) {
@@ -928,7 +975,12 @@ function equipCompareHtml(it) {
     else lines.push(`<span class="muted">${label} ${sa}（持平）</span>`);
   }
   const curPower = calcPower(cur.stats || {});
-  return { html: `<div class="equip-cmp"><p class="muted">与当前佩戴对比：战力 ${myPower} vs ${curPower}</p>${lines.join('')}</div>`, better: myPower > curPower, myPower, curPower };
+  const diff = myPower - curPower;
+  let conclusion;
+  if (diff > 0) conclusion = `<p class="cmp-conclusion cmp-better">综合结论：推荐穿戴（战力 +${diff}）</p>`;
+  else if (diff < 0) conclusion = `<p class="cmp-conclusion cmp-worse">综合结论：不建议替换（当前更强，战力 ${diff}）</p>`;
+  else conclusion = `<p class="cmp-conclusion">综合结论：与当前持平，可自行选择</p>`;
+  return { html: `<div class="equip-cmp"><p class="muted">与当前佩戴对比：战力 ${myPower} vs ${curPower}</p>${lines.join('')}${conclusion}</div>`, better: diff > 0, myPower, curPower };
 }
 async function openSellConfirm(id) {
   if (backpackBusy) return;
@@ -971,7 +1023,7 @@ async function openSellConfirm(id) {
     });
   } else {
     const cmp = equipCompareHtml(it);
-    const warn = cmp.better
+    const warn = (cmp.better && cmp.curPower > 0)
       ? `<p class="sell-warn">⚠️ 这件装备战力 ${cmp.myPower}，高于当前佩戴（${cmp.curPower}），出售后无法找回，确定要卖掉吗？</p>`
       : `<p class="sell-warn">⚠️ 出售后无法找回，确定出售吗？</p>`;
     backpackSell = { id, qty: 1, name: it.name, gain: unit, unit };
@@ -1005,6 +1057,59 @@ async function sellItem() {
   } catch (e) { toast(e.message, true); } finally { backpackBusy = false; }
 }
 
+/* ---------- 背包批量多选出售（P2：装备决策与背包批量整理） ---------- */
+function toggleBpBatch() {
+  bpBatch.on = !bpBatch.on;
+  if (!bpBatch.on) { bpBatch.sel.clear(); bpBatch.gain = 0; }
+  renderBackpackList();
+}
+function bpSelectable(it) {
+  if (!it || !it.sellable) return false;
+  if (it.type === 'quest') return false;
+  if (['weapon', 'armor', 'accessory'].includes(it.type)) {
+    const cur = findEquippedByType(it.type);
+    if (cur && cur.id === it.id) return false;
+  }
+  return true;
+}
+function bpSelect(id) {
+  if (bpBatch.sel.has(id)) bpBatch.sel.delete(id); else bpBatch.sel.add(id);
+  bpBatchGain();
+  renderBackpackList();
+}
+function bpBatchGain() {
+  let gain = 0;
+  bpBatch.sel.forEach(id => {
+    const it = findBackpackItem(id);
+    if (it) gain += (Number(it.sell_unit_price) || 0) * (it.type === 'material' ? (it.quantity || 1) : 1);
+  });
+  bpBatch.gain = gain;
+}
+function bpBatchClear() {
+  bpBatch.sel.clear(); bpBatch.gain = 0;
+  renderBackpackList();
+}
+async function sellBatch() {
+  if (backpackBusy) return;
+  const ids = [...bpBatch.sel];
+  if (!ids.length) { toast('请先勾选要出售的物品', true); return; }
+  backpackBusy = true;
+  try {
+    let total = 0, cnt = 0;
+    for (const id of ids) {
+      const it = findBackpackItem(id);
+      if (!it || !bpSelectable(it)) continue;
+      const qty = it.type === 'material' ? (it.quantity || 1) : 1;
+      const d = await api('/api/rpg/sell', { method: 'POST', body: { item_id: id, quantity: qty } });
+      rpg.gold = d.gold; total += d.gain; cnt++;
+    }
+    updateGold();
+    bpBatch.sel.clear(); bpBatch.gain = 0;
+    toast(`批量出售 ${cnt} 件，共获得 🪙 ${total} 金币`);
+    await viewBackpack();
+  } catch (e) { toast(e.message, true); } finally { backpackBusy = false; }
+}
+
 /* ================================================================
  * RPG —— 副本页
  * ================================================================ */
@@ -1021,6 +1126,7 @@ async function viewDungeon() {
     rpg.dungeon = st;
     rpg.goals = gl.goals || [];
     rpg.char = ch || rpg.char;
+    if (ch && ch.gold != null) { rpg.gold = ch.gold; updateGold(); }
     pendingRandomEvent = evt.event || null;
     $('#view').innerHTML = renderDungeonPage(st);
   } catch (e) {
@@ -1104,6 +1210,7 @@ function renderDungeonPage(st) {
         <p>⚔️ 开始副本将消耗 <b>1</b> 次挑战次数，今日剩余 <b>${remain}</b> 次（每日上限 ${DUNGEON_DAILY_LIMIT}）。</p>
         <p class="muted">失败规则：损失少量金币、药水按使用量消耗；章节目标与每日任务进度保留。低于推荐战力挑战时风险较高，建议先整备。</p>
       </div>
+      ${renderDungeonPrepCard(st, remain)}
       <div class="dungeon-actions">
         <label class="field inline"><span>章节</span>
           <select id="dungeonChapter">
@@ -1248,6 +1355,41 @@ async function showDungeonInfo(chapter) {
       ${d.encounters.map(e => `<div class="drop-group"><b>${esc(e.name)}</b><p class="muted">${esc(e.desc)}</p></div>`).join('') || '<p class="muted">暂无剧情</p>'}
       <div class="dungeon-actions"><button class="ghost" data-action="close-modal">关闭</button></div>`);
   } catch (e) { toast(e.message, true); }
+}
+
+/* 副本入口：上次失败个性化恢复路线 + 金币投入-回报循环（P0/P1） */
+function renderDungeonPrepCard(st, remain) {
+  const lf = st.last_fail;
+  const gold = rpg.gold != null ? rpg.gold : 0;
+  const potionNeed = 60; // 建议备战：3 瓶小型药水
+  const lack = Math.max(0, potionNeed - gold);
+  const failCard = lf ? `
+    <section class="panel glass fail-remain-card">
+      <h3 class="panel-title">💔 上次挑战失败</h3>
+      <div class="fail-advice">
+        <p>倒在了 <b>${esc(lf.monster || '未知怪物')}</b>${lf.slot ? `（${esc(lf.slot)}）` : ''}${lf.date ? ` · ${esc(lf.date)}` : ''}</p>
+        ${lf.damage_sources && lf.damage_sources.length ? `<p class="muted">主要伤害来源：${lf.damage_sources.slice(0, 2).map(x => `${esc(x.name || '未知')}（${x.dmg || 0}）`).join('、')}</p>` : ''}
+        ${lf.gold_loss ? `<p class="muted">损失金币 🪙 ${lf.gold_loss}</p>` : ''}
+        <p><b>恢复路线建议：</b>${lf.monster ? '针对威胁最大的怪物属性整备' : '强化生命/防御并备足药水'}，参考下方直达入口。</p>
+      </div>
+      <div class="prep-row">
+        <button class="block primary" data-action="goto-prep" data-target="backpack">🎒 背包换装</button>
+        <button class="block primary" data-action="goto-prep" data-target="shop">🛒 商店补给药水</button>
+        <button class="block primary" data-action="goto-prep" data-target="forge">🔨 铁匠铺强化</button>
+      </div>
+    </section>` : '';
+  const costCard = `
+    <section class="panel glass">
+      <h3 class="panel-title">📈 本次投入与回报</h3>
+      <div class="attr-grid">
+        <div class="attr-cell"><span>今日剩余次数</span><b>${remain} / ${DUNGEON_DAILY_LIMIT}</b></div>
+        <div class="attr-cell"><span>每次消耗</span><b>1 次 + 药水</b></div>
+        <div class="attr-cell"><span>主要收益</span><b>经验 / 金币 / 掉落</b></div>
+        <div class="attr-cell"><span>当前金币</span><b class="gold-strong">🪙 ${gold}</b></div>
+      </div>
+      ${lack > 0 ? `<p class="sell-warn">⚠️ 金币不足：还差 <b>${lack}</b> 金币即可补充药水。可先去「背包」出售闲置物品，或到「交易行」上架赚金币。</p>` : '<p class="muted">金币充足，建议至少携带 3 瓶小型药水进入副本。</p>'}
+    </section>`;
+  return failCard + costCard;
 }
 
 function renderDungeonSummary(st) {
@@ -1500,14 +1642,26 @@ async function dungeonSettle() {
     dungeonSession = null;
     rpg.gold += runGold;
     updateGold();
+    let goalRes = null, dailyRes = null;
+    try { [goalRes, dailyRes] = await Promise.all([api('/api/rpg/goals'), api('/api/rpg/daily')]); } catch (e) { /* 奖励拉取失败不阻塞结算 */ }
+    if (goalRes && goalRes.goals) rpg.goals = goalRes.goals;
+    if (dailyRes && dailyRes.tasks) { if (!rpg.daily) rpg.daily = {}; rpg.daily.tasks = dailyRes.tasks; }
     const battles = (d.battles || []).map(b => `
       <div class="battle-card">
         <div class="battle-head">事件 ${b.event} · ${esc(b.monster)} · ${b.win ? '✅ 胜' : '❌ 败'}</div>
         <ul class="battle-log">${(b.log || []).map(x => `<li>${esc(x)}</li>`).join('')}</ul>
       </div>`).join('');
     const drops = (d.drops || []).map(x => `<span class="r-item drop-item ${QUALITY_CLASS[x.quality] || 'q-normal'}">📦 ${esc(x.name)} ×${x.quantity || 1}（${QUALITY_CN[x.quality] || x.quality}）</span>`).join('');
+    const netGold = d.net_gold != null ? d.net_gold : d.gold;
+    const goldDetail = (d.gold_gain != null || d.gold_loss != null)
+      ? ` <span class="muted">（获得 ${d.gold_gain != null ? d.gold_gain : 0} · 损失 ${d.gold_loss != null ? d.gold_loss : 0}）</span>`
+      : '';
+    const levelCell = d.level_gain > 0
+      ? `<div class="attr-cell"><span>等级</span><b>Lv.${d.level_at_start} → ${d.level} 🎉</b></div>`
+      : '';
     $('#view').innerHTML = `
       <div class="page-title"><h2>副本结算</h2><p class="muted">第 ${d.chapter} 章</p></div>
+      ${renderGoalClaimCard(goalRes, dailyRes)}
       <section class="panel glass">
         <h3 class="panel-title">总览</h3>
         <div class="attr-grid">
@@ -1515,12 +1669,14 @@ async function dungeonSettle() {
           <div class="attr-cell"><span>Boss</span><b>${d.boss_killed ? '✅ 已击败' : '—'}</b></div>
           <div class="attr-cell"><span>结果</span><b>${d.failed ? '❌ 失败' : '✅ 通关'}</b></div>
           <div class="attr-cell"><span>药水使用</span><b>${d.potions_used} 瓶</b></div>
+          ${levelCell}
         </div>
         <div class="reward-line">
-          <span class="r-exp">✨ 经验 +${d.exp}</span>
-          <span class="r-gold">🪙 +${d.gold}</span>
+          <span class="r-exp">✨ 经验 +${d.exp}${d.level_gain > 0 ? `（升级到 Lv.${d.level}）` : ''}</span>
+          <span class="r-gold">🪙 净 ${netGold >= 0 ? '+' : ''}${netGold}${goldDetail}</span>
           ${drops}
         </div>
+        ${d.failed && d.gold_loss ? `<p class="muted">本局失败损失 🪙 ${d.gold_loss} 金币，药水消耗 ${d.potions_used} 瓶。</p>` : ''}
         ${d.old_map_used ? '<p class="muted">使用了「猎人旧地图」，本局 Boss 出现率提升。</p>' : ''}
       </section>
       <section class="panel glass"><h3 class="panel-title">战斗战报</h3>${battles || '<p class="empty-tip">本局没有战斗记录</p>'}</section>
@@ -1532,6 +1688,33 @@ async function dungeonSettle() {
     refreshRewardBadge();
     rpg.dungeon = null;
   } catch (e) { toast(e.message, true); }
+}
+
+/* 结算页：优先展示本局刚完成、可领取的目标/每日任务奖励（P1：统一奖励领取） */
+function renderGoalClaimCard(goalRes, dailyRes) {
+  const goals = (goalRes && goalRes.goals) || [];
+  const daily = (dailyRes && dailyRes.tasks) || [];
+  const doneGoals = goals.filter(x => x.done && !x.claimed);
+  const doneDaily = daily.filter(x => x.done && !x.claimed);
+  if (!doneGoals.length && !doneDaily.length) return '';
+  const goalHtml = doneGoals.map(g => `
+    <div class="r-done-line">
+      <span class="goal-ico">${GOAL_ICO[g.type] || '🎯'}</span>
+      <span class="r-done-title">${esc(g.type_cn)}：${esc(g.target)}</span>
+      <span class="r-done-reward">奖励：${esc(goalRewardText(g.reward))}</span>
+      <button class="ghost sm" data-action="goal-claim" data-id="${g.id}">领取</button>
+    </div>`).join('');
+  const dailyHtml = doneDaily.map(t => `
+    <div class="r-done-line">
+      <span class="goal-ico">${DAILY_ICO[t.type] || '📅'}</span>
+      <span class="r-done-title">${esc(t.type_cn)}：${esc(t.target)}</span>
+      <span class="r-done-reward">奖励：${esc(goalRewardText(t.reward))}</span>
+      <button class="ghost sm" data-action="daily-claim" data-slot="${t.slot}">领取</button>
+    </div>`).join('');
+  return `<section class="panel glass reward-pending">
+    <h3 class="panel-title">🎁 本局完成后可领取</h3>
+    ${goalHtml}${dailyHtml}
+  </section>`;
 }
 
 /* ================================================================
@@ -1917,36 +2100,37 @@ async function renderMarketMine() {
   try {
     const d = await api('/api/rpg/market/mine');
     rpg.market.mine = d.orders || [];
-    const active = (d.orders || []).filter(o => o.status === 'active');
+    const orders = d.orders || [];
+    const now = Date.now();
+    const SOON_MS = 24 * 3600 * 1000; // 剩余不足 24 小时视为即将过期
+    const soon = orders.filter(o => o.status === 'active' && o.expires_at - now < SOON_MS);
+    const active = orders.filter(o => o.status === 'active' && o.expires_at - now >= SOON_MS);
+    const sold = orders.filter(o => o.status === 'sold');
+    const pending = orders.filter(o => o.status === 'expired' || o.status === 'cancelled');
+    const card = o => {
+      const stats = o.item_stats && Object.keys(o.item_stats).length ? `<div class="item-stats">${statsText(o.item_stats)}</div>` : '';
+      const remain = o.status === 'active' ? `${Math.max(0, Math.ceil((o.expires_at - now) / 3600000))} 小时后到期` : '';
+      return `
+        <div class="shop-card glass">
+          <div class="shop-ico">${TYPE_ICO[o.item_type] || '📦'}</div>
+          <div class="shop-name">${esc(o.item_name)} ${qualityBadge(o.item_quality)}${o.status === 'active' && o.expires_at - now < SOON_MS ? ' <span class="q-badge q-rare">即将过期</span>' : ''}</div>
+          <div class="shop-type muted">${TYPE_CN[o.item_type] || o.item_type}${o.quantity > 1 ? ' ×' + o.quantity : ''} · ${MARKET_STATUS_CN[o.status] || o.status}${remain ? ' · ' + remain : ''}</div>
+          ${stats}
+          <div class="shop-buy-row">
+            <span class="shop-total muted">🪙 ${o.price}</span>
+            ${o.status === 'active' ? `<button class="ghost sm" data-action="market-cancel" data-id="${o.id}">下架</button>` : ''}
+          </div>
+        </div>`;
+    };
+    const group = (title, list, emptyTip) => `<h3 class="panel-title" style="margin-top:16px">${title}（${list.length}）</h3>
+      <div class="shop-grid">${list.map(card).join('') || `<p class="empty-tip">${emptyTip}</p>`}</div>`;
     wrap.innerHTML = `
       <div class="market-toolbar">
-        <span class="muted">在售 ${active.length} 笔 · 全部 ${(d.orders || []).length} 笔</span>
+        <span class="muted">在售 ${orders.filter(o => o.status === 'active').length} 笔 · 全部 ${orders.length} 笔</span>
         <button class="primary sm" data-action="market-sell">+ 上架物品</button>
       </div>
-      <div class="shop-grid">
-        ${active.map(o => {
-          const stats = o.item_stats && Object.keys(o.item_stats).length ? `<div class="item-stats">${statsText(o.item_stats)}</div>` : '';
-          return `
-          <div class="shop-card glass">
-            <div class="shop-ico">${TYPE_ICO[o.item_type] || '📦'}</div>
-            <div class="shop-name">${esc(o.item_name)} ${qualityBadge(o.item_quality)}</div>
-            <div class="shop-type muted">${TYPE_CN[o.item_type] || o.item_type}${o.quantity > 1 ? ' ×' + o.quantity : ''} · 在售</div>
-            ${stats}
-            <div class="shop-buy-row">
-              <span class="shop-total muted">🪙 ${o.price}</span>
-              <button class="ghost sm" data-action="market-cancel" data-id="${o.id}">下架</button>
-            </div>
-          </div>`;
-        }).join('') || '<p class="empty-tip">暂无在售挂单，点击“上架物品”出售背包中的装备或材料</p>'}
-      </div>
-      <h3 class="panel-title" style="margin-top:16px">历史记录</h3>
-      <div class="stack-list">
-        ${(d.orders || []).filter(o => o.status !== 'active').map(o => `
-          <div class="stack-row glass">
-            <span class="stack-ico">${TYPE_ICO[o.item_type] || '📦'}</span>
-            <span class="muted">${esc(o.item_name)} ×${o.quantity} · 🪙 ${o.price} · ${MARKET_STATUS_CN[o.status] || o.status}</span>
-          </div>`).join('') || '<p class="empty-tip">暂无历史记录</p>'}
-      </div>`;
+      ${orders.length ? group('⏳ 即将过期', soon, '暂无即将过期的挂单') + group('🛒 在售', active, '暂无在售挂单') + group('✅ 已售出', sold, '暂无已售出记录') + group('📋 待处理（已过期/已下架）', pending, '暂无待处理记录')
+        : '<div class="shop-grid"><p class="empty-tip">暂无任何挂单记录，点击“上架物品”出售背包中的装备或材料</p></div>'}`;
   } catch (e) { toast(e.message, true); wrap.innerHTML = '<p class="empty-tip">加载失败</p>'; }
 }
 let marketSellItems = []; // 上架候选：背包可交易物品
@@ -1965,17 +2149,41 @@ async function openMarketSell(preselectId) {
     renderMarketSellModal();
   } catch (e) { toast(e.message, true); }
 }
-/* 上架参考价：查询同类在售最低价（不含自己的挂单，体验打磨第 5 条） */
+/* 上架参考价：查询同类在售最低价（不含自己的挂单），并据此生成三档快捷定价（P2） */
 async function loadMarketRef(name) {
   const el = $('#marketRef');
   if (!el) return;
   el.textContent = '参考价查询中…';
   try {
     const d = await api(`/api/rpg/market/reference?name=${encodeURIComponent(name)}`);
+    marketRefPrice = d && d.lowest ? Number(d.lowest) : 0;
     el.textContent = (d && d.lowest)
       ? `参考价：同类物品在售最低价 🪙 ${d.lowest}（不含你的挂单，共 ${d.count} 单）`
       : '参考价：暂无同类物品在售，可自行定价';
-  } catch (e) { el.textContent = '参考价：查询失败，可自行定价'; }
+  } catch (e) { marketRefPrice = 0; el.textContent = '参考价：查询失败，可自行定价'; }
+  const row = $('#quickPriceRow');
+  if (row) row.innerHTML = quickPriceHtml();
+}
+function quickPriceHtml() {
+  if (!marketRefPrice) return '<p class="muted">暂无同类在售参考价，请手动定价或参考上方参考价说明。</p>';
+  const low = Math.max(1, Math.floor(marketRefPrice * 0.85));
+  const ref = marketRefPrice;
+  const high = Math.min(500000, Math.ceil(marketRefPrice * 1.15));
+  return `<span class="muted">快捷定价（基于同类在售最低价）：</span>
+    <button class="ghost sm" data-action="market-price" data-mode="low">🐢 低价快出 🪙 ${low}</button>
+    <button class="ghost sm" data-action="market-price" data-mode="ref">📌 参考价 🪙 ${ref}</button>
+    <button class="ghost sm" data-action="market-price" data-mode="high">🚀 稍高试挂 🪙 ${high}</button>`;
+}
+function setQuickPrice(mode) {
+  const it = marketSellSel >= 0 ? marketSellItems[marketSellSel] : null;
+  if (!it || !marketRefPrice) { toast('暂无参考价，请手动定价', true); return; }
+  let price = marketRefPrice;
+  if (mode === 'low') price = Math.max(1, Math.floor(marketRefPrice * 0.85));
+  else if (mode === 'high') price = Math.min(500000, Math.ceil(marketRefPrice * 1.15));
+  const pr = $('#sellPrice');
+  if (pr) pr.value = price;
+  refreshMarketSummary();
+  toast(`已套用${mode === 'low' ? '低价快出' : mode === 'ref' ? '参考价' : '稍高试挂'} 🪙 ${price}，预计到手见下方`);
 }
 /* 上架摘要：数量 × 单价 = 总价，扣 5% 手续费后实际到账 */
 function refreshMarketSummary() {
@@ -2013,6 +2221,7 @@ function renderMarketSellModal() {
         <label class="field"><span>单价（金币）</span>
           <input type="number" id="sellPrice" value="100" min="1" max="500000">
         </label>
+        <div class="quick-price-row" id="quickPriceRow"><span class="muted">参考价查询中…</span></div>
         <div class="market-summary">
           <p class="muted">数量 <b>${it.type === 'material' ? it.sellQty : 1}</b> × 单价 🪙 <b>${100}</b> = 总价 🪙 <b id="marketTotal">${(it.type === 'material' ? it.sellQty : 1) * 100}</b></p>
           <p class="muted">手续费（5%）🪙 <b id="marketFee">${Math.floor(((it.type === 'material' ? it.sellQty : 1) * 100) * 0.05)}</b> · 实际到账 🪙 <b class="gold-strong" id="marketGain">${((it.type === 'material' ? it.sellQty : 1) * 100) - Math.floor(((it.type === 'material' ? it.sellQty : 1) * 100) * 0.05)}</b></p>
@@ -2096,13 +2305,16 @@ async function viewAchievements() {
   setNav('achievements');
   $('#view').innerHTML = '<p class="empty-tip">加载中…</p>';
   try {
-    const d = await api('/api/rpg/achievements');
+    const [d, goalRes, dailyRes] = await Promise.all([api('/api/rpg/achievements'), api('/api/rpg/goals'), api('/api/rpg/daily')]);
     const ach = d.achievements || [];
     rpg.achievements = ach;
+    if (goalRes && goalRes.goals) rpg.goals = goalRes.goals;
+    if (dailyRes && dailyRes.tasks) { if (!rpg.daily) rpg.daily = {}; rpg.daily.tasks = dailyRes.tasks; }
     const unlocked = ach.filter(x => x.unlocked).length;
     const claimable = ach.filter(x => x.claimable).length;
     $('#view').innerHTML = `
       <div class="page-title"><h2>成就</h2><p class="muted">已解锁 ${unlocked} / ${ach.length} · 可领取 ${claimable}</p></div>
+      ${renderRewardCenter(goalRes, dailyRes, ach)}
       <div class="ach-grid">
         ${ach.map(a => renderAchCard(a)).join('')}
       </div>`;
@@ -2111,6 +2323,22 @@ async function viewAchievements() {
     if (/尚未创建角色/.test(e.message)) { $('#view').innerHTML = `<p class="empty-tip">尚未创建角色，请先前往「角色」页创建。</p>`; }
     else { toast(e.message, true); $('#view').innerHTML = '<p class="empty-tip">加载失败</p>'; }
   }
+}
+/* 统一奖励领取入口：汇总章节目标 / 每日任务 / 成就（P1） */
+function renderRewardCenter(goalRes, dailyRes, ach) {
+  const goals = ((goalRes && goalRes.goals) || []).filter(x => x.claimable && !x.claimed);
+  const daily = ((dailyRes && dailyRes.tasks) || []).filter(x => x.claimable && !x.claimed);
+  const achs = (ach || []).filter(x => x.claimable && !x.claimed);
+  const total = goals.length + daily.length + achs.length;
+  if (!total) return `<section class="panel glass reward-center"><h3 class="panel-title">🎁 奖励中心</h3><p class="muted">暂无待领取奖励，去副本完成章节目标与每日任务吧。</p></section>`;
+  return `<section class="panel glass reward-center">
+    <h3 class="panel-title">🎁 奖励中心 <span class="muted">共 ${total} 项待领取</span></h3>
+    <div class="reward-center-rows">
+      <div class="r-done-line"><span>🎯 章节目标</span><b>${goals.length} 项待领取</b>${goals.length ? `<button class="ghost sm" data-action="goto-rewards">去领取</button>` : ''}</div>
+      <div class="r-done-line"><span>📅 每日任务</span><b>${daily.length} 项待领取</b>${daily.length ? `<button class="ghost sm" data-action="goto-rewards">去领取</button>` : ''}</div>
+      <div class="r-done-line"><span>🏆 成就</span><b>${achs.length} 项待领取</b>${achs.length ? `<button class="ghost sm" data-action="nav" data-view="achievements">刷新并领取</button>` : ''}</div>
+    </div>
+  </section>`;
 }
 function renderAchCard(a) {
   const pct = Math.min(100, Math.round(a.progress / a.amount * 100));

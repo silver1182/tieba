@@ -230,6 +230,7 @@ ensurePlayerCol('potion_limit', "potion_limit INTEGER NOT NULL DEFAULT 1");
 
 /* player 转生配置迁移（P5：转生次数 / 称号 / 永久加成） */
 ensurePlayerCol('reincarnate_count', "reincarnate_count INTEGER NOT NULL DEFAULT 0");
+ensurePlayerCol('last_fail', "last_fail TEXT NOT NULL DEFAULT ''");
 ensurePlayerCol('reincarnate_title', "reincarnate_title TEXT NOT NULL DEFAULT ''");
 ensurePlayerCol('reincarnate_bonus_hp', "reincarnate_bonus_hp INTEGER NOT NULL DEFAULT 0");
 ensurePlayerCol('reincarnate_bonus_atk', "reincarnate_bonus_atk INTEGER NOT NULL DEFAULT 0");
@@ -1762,11 +1763,11 @@ async function handleDungeonStart(req, res, u){
   const oldMap = hasAndConsumeOldMap(u.id);
   const bossRate = oldMap ? 0.55 : 0.35;
   const gen = generateDungeonEvents(chapter, bossRate);
-  const session = { chapter, events: gen.events, idx: 0, startedAt: now(), potionsUsed: 0, exp: 0, gold: 0, drops: [], bossKilled: false, failed: false, failedAt: null, nextMonsterAtkBonus: 0, bossBoost: oldMap ? 1 : 0, oldMap, battleLogs: [], nextForceElite: false };
+  const session = { chapter, events: gen.events, idx: 0, startedAt: now(), potionsUsed: 0, exp: 0, gold: 0, goldLoss: 0, drops: [], bossKilled: false, failed: false, failedAt: null, nextMonsterAtkBonus: 0, bossBoost: oldMap ? 1 : 0, oldMap, battleLogs: [], nextForceElite: false, levelAtStart: p.level };
   dungeonSessions.set(u.id, session);
   const fullHp = computeStats(p, getPlayerItems(u.id)).max_hp;
-  p.daily_count++; p.last_dungeon_date = today; p.cur_hp = fullHp;
-  stmt('UPDATE player SET daily_count=?, last_dungeon_date=?, cur_hp=? WHERE user_id=?', p.daily_count, today, fullHp, u.id);
+  p.daily_count++; p.last_dungeon_date = today; p.cur_hp = fullHp; p.last_fail = '';
+  stmt('UPDATE player SET daily_count=?, last_dungeon_date=?, cur_hp=?, last_fail=? WHERE user_id=?', p.daily_count, today, fullHp, '', u.id);
   const remaining = DUNGEON_DAILY_LIMIT - p.daily_count;
   return out(res, 201, { ok: true, chapter, remaining, old_map_used: oldMap, events: gen.events.map(e => ({ slot: e.slot, type: e.type, name: e.name, desc: e.desc, choices: e.choices })) });
 }
@@ -1818,10 +1819,12 @@ async function handleDungeonEvent(req, res, u){
     const loss = Math.floor(p.gold * lossRate);
     p.gold = Math.max(0, p.gold - loss);
     stmt('UPDATE player SET gold=? WHERE user_id=?', p.gold, u.id);
-    s.failed = true; s.failedAt = ev.slot; s.idx = s.events.length;
+    s.failed = true; s.failedAt = ev.slot; s.idx = s.events.length; s.goldLoss += loss;
     const fullHp = computeStats(p, getPlayerItems(u.id)).max_hp;
     p.cur_hp = fullHp;
-    stmt('UPDATE player SET cur_hp=? WHERE user_id=?', fullHp, u.id);
+    const failNote = { monster: ev.monster, slot: ev.slot, date: localDateStr(), damage_sources: (battle.dmgSrc || []).slice(0, 3), gold_loss: loss };
+    p.last_fail = JSON.stringify(failNote);
+    stmt('UPDATE player SET cur_hp=?, last_fail=? WHERE user_id=?', fullHp, JSON.stringify(failNote), u.id);
     return out(res, 200, { ok: true, win: false, monster: ev.monster, gold_loss: loss, turns: battle.turns, heal_used: battle.healUsed, damage_sources: battle.dmgSrc, cur_hp: fullHp, log: battle.log, hpTrace: battle.hpTrace, playerName: u.display_name || u.username, finished: true, failed: true });
   }
   const choice = Number(b.choice) || 1;
@@ -1854,9 +1857,12 @@ function handleDungeonSettle(req, res, u){
   }
   recordDungeonRun(u.id, s.chapter, cleared);
   const rnd = cleared ? maybeTriggerRandomEvent(u.id) : null;
+  const lv = p ? p.level : s.levelAtStart;
   return out(res, 200, {
     ok: true, chapter: s.chapter, total_events: s.events.length, completed_events: completedEvents,
     boss_killed: s.bossKilled, failed: s.failed, failed_at: s.failedAt, exp: s.exp, gold: s.gold,
+    gold_gain: s.gold, gold_loss: s.goldLoss, net_gold: s.gold - s.goldLoss,
+    level: lv, level_at_start: s.levelAtStart, level_gain: Math.max(0, lv - s.levelAtStart),
     drops: s.drops, potions_used: s.potionsUsed, old_map_used: s.oldMap, battles: s.battleLogs,
     random_event: rnd
   });
@@ -1868,6 +1874,10 @@ function handleDungeonStatus(req, res, u){
   const today = localDateStr();
   const used = p.last_dungeon_date === today ? p.daily_count : 0;
   const s = dungeonSessions.get(u.id);
+  let lastFail = null;
+  if(p.last_fail){
+    try { lastFail = JSON.parse(p.last_fail); } catch(e) { lastFail = null; }
+  }
   const chapters = [1, 2].map(ch => {
     const cfg = CHAPTER_CONFIG[ch] || CHAPTER_CONFIG[1];
     const boss = MONSTER_CONFIG[cfg.boss] || { hp: 0, attack: 0, defense: 0 };
@@ -1883,6 +1893,7 @@ function handleDungeonStatus(req, res, u){
     chapter: p.chapter, level: p.level, boss_kills_ch1: p.boss_kills_ch1, boss_kills_ch2: p.boss_kills_ch2,
     ch2_unlocked: p.level >= 3 && p.boss_kills_ch1 >= 1,
     auto_potion: { enabled: p.auto_potion !== 0, threshold: p.potion_threshold != null ? p.potion_threshold : 35, limit: p.potion_limit != null ? p.potion_limit : 1 },
+    last_fail: lastFail,
     in_dungeon: !!s, dungeon_progress: s ? { chapter: s.chapter, next_slot: s.idx + 1, total: s.events.length, finished: s.idx >= s.events.length, failed: s.failed } : null
   });
 }
